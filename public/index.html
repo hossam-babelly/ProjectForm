@@ -1,0 +1,23 @@
+<table>
+    <tr>
+        <th>الصنف</th>
+        <th>العدد</th>
+        <th>التكلفة للواحدة</th>
+        <th>الإجمالي</th>
+    </tr>
+    <tr>
+        <td><select><option>آلات</option><option>معدات</option></select></td>
+        <td><input type="number" id="qty1" oninput="calc()"></td>
+        <td><input type="number" id="price1" oninput="calc()"></td>
+        <td><span id="total1">0</span>$</td>
+    </tr>
+</table>
+
+<script>
+function calc() {
+    let q = document.getElementById('qty1').value || 0;
+    let p = document.getElementById('price1').value || 0;
+    document.getElementById('total1').innerText = (q * p).toLocaleString() + "$";
+    // تحديث ملخص المعلومات [cite: 4, 5]
+}
+</script>
