@@ -268,15 +268,37 @@
     line-height: 1.7;
   }
 
-  /* ORG CHART */
-  #orgChart { margin-top: 20px; overflow-x: auto; }
-  .org-node {
-    display: inline-block; background: var(--primary);
-    color: white; border-radius: 8px; padding: 8px 16px;
-    font-size: 12px; font-weight: 600; white-space: nowrap;
-    margin: 4px;
+  /* ORG CHART TREE (RTL) */
+  #orgChart { margin-top: 20px; overflow-x: auto; padding-bottom: 20px; }
+  .org-tree ul {
+      display: flex; flex-direction: row; justify-content: center;
+      padding-top: 20px; position: relative; padding-inline-start: 0;
   }
-  .org-row { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
+  .org-tree li {
+      display: flex; flex-direction: column; align-items: center;
+      list-style-type: none; position: relative; padding: 20px 8px 0 8px;
+  }
+  .org-tree li::before, .org-tree li::after {
+      content: ''; position: absolute; top: 0;
+      width: 50%; height: 20px; border-top: 2px solid #cbd5e1;
+  }
+  .org-tree li::before { right: 0; border-right: 2px solid #cbd5e1; border-top-right-radius: 6px; }
+  .org-tree li::after { left: 0; }
+  .org-tree li:first-child::before { border-top: 0; border-right: 0; }
+  .org-tree li:first-child::after { border-top-left-radius: 6px; }
+  .org-tree li:last-child::before { border-top-right-radius: 6px; border-right: 2px solid #cbd5e1; }
+  .org-tree li:last-child::after { border-top: 0; }
+  .org-tree li:only-child::before, .org-tree li:only-child::after { display: none; }
+  .org-tree li:only-child { padding-top: 0; }
+  .org-tree ul ul::before {
+      content: ''; position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+      border-left: 2px solid #cbd5e1; width: 0; height: 20px;
+  }
+  .node-card {
+      display: inline-block; padding: 10px 18px; border-radius: 8px; color: white;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1); min-width: 120px; text-align: center;
+      z-index: 2; position: relative;
+  }
 
   @media (max-width: 640px) {
     header { padding: 18px 16px; }
@@ -344,13 +366,24 @@
       <div class="section-header">
         <div class="s-icon">1</div>
         <div>
-          <h3>فكرة المشروع</h3>
-          <p>أدخل وصفاً موجزاً لفكرة المشروع</p>
+          <h3>المعلومات الأساسية</h3>
+          <p>أدخل فكرة المشروع وبيانات المقدم</p>
         </div>
       </div>
       <div class="section-body">
         <label for="projectIdea">فكرة المشروع *</label>
         <textarea id="projectIdea" name="projectIdea" rows="4" placeholder="اكتب هنا وصفاً لفكرة المشروع..." oninput="updateSummary()"></textarea>
+        
+        <div style="display:flex; gap:16px; margin-top:16px; flex-wrap:wrap">
+          <div style="flex:1; min-width:200px">
+            <label for="submitterName">اسم مقدم المشروع *</label>
+            <input type="text" id="submitterName" name="submitterName" placeholder="الاسم الكامل" oninput="updateSummary()">
+          </div>
+          <div style="flex:1; min-width:200px">
+            <label for="submitterPhone">رقم الهاتف *</label>
+            <input type="text" id="submitterPhone" name="submitterPhone" placeholder="مثال: 05xxxxxxx" oninput="updateSummary()">
+          </div>
+        </div>
       </div>
     </div>
 
@@ -576,7 +609,7 @@
           </table>
         </div>
         <button type="button" class="add-row-btn" onclick="addHRRow()">➕ إضافة موظف</button>
-        <div id="orgChart" style="margin-top:24px">
+        <div id="orgChart">
           <div style="font-size:13px;font-weight:700;color:var(--primary);margin-bottom:10px">🏗️ الهيكل التنظيمي</div>
           <div id="orgChartInner"></div>
         </div>
@@ -627,7 +660,7 @@ function parseMoney(s) {
 
 // ─── STEP NAVIGATION ─────────────────────────────────────
 function buildProgress() {
-  const labels = ['فكرة المشروع','التكاليف التأسيسية','المنتجات','الإيرادات','التكاليف التشغيلية','التكاليف الثابتة','الاهتلاك','الموارد البشرية'];
+  const labels = ['المعلومات الأساسية','التكاليف التأسيسية','المنتجات','الإيرادات','التكاليف التشغيلية','التكاليف الثابتة','الاهتلاك','الموارد البشرية'];
   const bar = document.getElementById('progressBar');
   bar.innerHTML = '';
   labels.forEach((l,i) => {
@@ -666,31 +699,24 @@ function updateSummary() {
   const idea = document.getElementById('projectIdea').value.trim();
   document.getElementById('sum_idea').textContent = idea || '—';
 
-  // founding total
   const ft = calcFoundingTotal();
   document.getElementById('sum_founding').textContent = fmtMoney(ft);
 
-  // revenue annual
   const rv = calcRevenueAnnual();
   document.getElementById('sum_revenue').textContent = fmtMoney(rv);
 
-  // ops annual
   const ops = calcOpsAnnual();
   document.getElementById('sum_operational').textContent = fmtMoney(ops);
 
-  // fixed annual = monthly * 12
   const fx = calcFixedMonthlyTotal() * 12;
   document.getElementById('sum_fixed').textContent = fmtMoney(fx);
 
-  // depreciation
   const dep = calcDepTotal();
   document.getElementById('sum_dep').textContent = fmtMoney(dep);
 
-  // net profit
   const profit = rv - ops - fx - dep;
   document.getElementById('sum_profit').textContent = fmtMoney(profit);
 
-  // employees
   const emp = calcTotalEmployees();
   document.getElementById('sum_employees').textContent = emp;
 }
@@ -737,9 +763,8 @@ function handleFoundingCat(sel, id) {
 function calcFoundingRow(n) {
   const qty = parseFloat(document.getElementById('fqty_'+n)?.value) || 0;
   const price = parseFloat(document.getElementById('fprice_'+n)?.value) || 0;
-  const total = qty * price;
   const el = document.getElementById('ftotal_'+n);
-  if(el) el.value = fmtMoney(total);
+  if(el) el.value = fmtMoney(qty * price);
   calcFoundingTotal();
   syncDepTable();
   updateSummary();
@@ -761,7 +786,7 @@ function delFoundingRow(n) {
 
 // ─── PRODUCTS TABLE ───────────────────────────────────────
 let productCount = 0;
-const products = {}; // id -> {name, unit, components:[]}
+const products = {};
 
 function addProduct() {
   productCount++;
@@ -827,24 +852,20 @@ function buildRevenueTable() {
 
   pids.forEach(pid => {
     const p = products[pid];
-    // quantity row
     const qtr = document.createElement('tr');
     qtr.innerHTML = `<td style="font-weight:700;text-align:right;padding-right:10px">${p.name}</td><td>${p.unit}</td>` +
       MONTHS.map((_,m) => `<td><input type="number" id="rev_qty_${pid}_${m}" min="0" value="0" oninput="calcRevenue(${pid},${m})"></td>`).join('');
     tbody.appendChild(qtr);
-    // unit price row
     const utr = document.createElement('tr');
     utr.innerHTML = `<td style="text-align:right;padding-right:10px;color:var(--text-muted);font-size:12px">سعر مبيع الواحدة</td><td>$</td>` +
       MONTHS.map((_,m) => `<td><input type="number" id="rev_uprice_${pid}_${m}" min="0" value="0" oninput="calcRevenue(${pid},${m})"></td>`).join('');
     tbody.appendChild(utr);
-    // total row
     const ttr = document.createElement('tr');
     ttr.innerHTML = `<td style="text-align:right;padding-right:10px;color:var(--text-muted);font-size:12px">سعر المبيع الإجمالي</td><td>$</td>` +
       MONTHS.map((_,m) => `<td><input type="text" class="computed" id="rev_total_${pid}_${m}" readonly value="$0"></td>`).join('');
     tbody.appendChild(ttr);
   });
 
-  // month totals
   let footHTML = '<tr class="total-row"><td colspan="2" style="text-align:right;padding-right:10px">الإجمالي</td>' +
     MONTHS.map((_,m) => `<td><input type="text" class="computed" id="rev_month_${m}" readonly value="$0"></td>`).join('') + '</tr>';
   tfoot.innerHTML = footHTML;
@@ -853,17 +874,16 @@ function buildRevenueTable() {
 function calcRevenue(pid, m) {
   const qty = parseFloat(document.getElementById(`rev_qty_${pid}_${m}`)?.value) || 0;
   const up = parseFloat(document.getElementById(`rev_uprice_${pid}_${m}`)?.value) || 0;
-  const tot = qty * up;
   const el = document.getElementById(`rev_total_${pid}_${m}`);
-  if(el) el.value = fmtMoney(tot);
-  // month total
+  if(el) el.value = fmtMoney(qty * up);
+  
   let mTot = 0;
   Object.keys(products).filter(p=>products[p].name).forEach(p => {
     mTot += parseMoney(document.getElementById(`rev_total_${p}_${m}`)?.value || 0);
   });
   const mel = document.getElementById(`rev_month_${m}`);
   if(mel) mel.value = fmtMoney(mTot);
-  // إعادة حساب التكاليف التشغيلية لأن الكمية تغيرت
+  
   calcOps(pid);
   updateSummary();
 }
@@ -903,7 +923,6 @@ function buildOpsTable() {
         MONTHS.map((_,m) => `<td><input type="number" id="ops_${pid}_${ci}_${m}" min="0" value="0" oninput="calcOps(${pid})"></td>`).join('');
       tbody.appendChild(tr);
     });
-    // product subtotal
     const sttr = document.createElement('tr');
     sttr.className = 'total-row';
     sttr.innerHTML = `<td colspan="3" style="text-align:right;padding-right:10px">إجمالي ${p.name}</td>` +
@@ -911,7 +930,6 @@ function buildOpsTable() {
     tbody.appendChild(sttr);
   });
 
-  // grand total
   let footHTML = '<tr class="total-row"><td colspan="3" style="text-align:right;padding-right:10px">الإجمالي</td>' +
     MONTHS.map((_,m) => `<td><input type="text" class="computed" id="ops_month_${m}" readonly value="$0"></td>`).join('') + '</tr>';
   tfoot.innerHTML = footHTML;
@@ -921,19 +939,14 @@ function calcOps(pid) {
   const p = products[pid];
   const comps = p.components.filter(c=>c);
   for(let m=0; m<12; m++) {
-    // مجموع تكاليف مكونات الوحدة الواحدة
     let unitCost = 0;
     comps.forEach((_,ci) => {
       unitCost += parseFloat(document.getElementById(`ops_${pid}_${ci}_${m}`)?.value) || 0;
     });
-    // الكمية المنتجة من جدول الإيرادات لنفس الشهر
     const qty = parseFloat(document.getElementById(`rev_qty_${pid}_${m}`)?.value) || 0;
-    // الإجمالي = تكلفة الوحدة × الكمية
-    const sub = unitCost * qty;
     const sel = document.getElementById(`ops_sub_${pid}_${m}`);
-    if(sel) sel.value = fmtMoney(sub);
+    if(sel) sel.value = fmtMoney(unitCost * qty);
   }
-  // grand total per month
   for(let m=0; m<12; m++) {
     let tot = 0;
     Object.keys(products).filter(p=>products[p].name).forEach(p2 => {
@@ -1039,11 +1052,10 @@ function syncDepTable() {
 function calcDepRow(n, price, qty) {
   const pct = parseFloat(document.getElementById('dpct_'+n)?.value) || 0;
   const perUnit = price * pct / 100;
-  const total = perUnit * qty;
   const dpu = document.getElementById('dpu_'+n);
   const dpt = document.getElementById('dpt_'+n);
   if(dpu) dpu.value = fmtMoney(perUnit);
-  if(dpt) dpt.value = fmtMoney(total);
+  if(dpt) dpt.value = fmtMoney(perUnit * qty);
   calcDepTotal();
   updateSummary();
 }
@@ -1095,14 +1107,25 @@ function getHRPositions() {
 function handleHRPos(sel, n) {
   if(sel.value === '__other__') {
     const val = prompt('أدخل المنصب الجديد:');
-    if(val && !extraHRPositions.includes(val)) extraHRPositions.push(val);
+    if(val && !extraHRPositions.includes(val)) {
+      extraHRPositions.push(val);
+      // تحديث جميع قوائم "تابع لـ"
+      document.querySelectorAll('[id^="hrreports_"]').forEach(s => {
+        if(![...s.options].some(o => o.value === val)) {
+          s.add(new Option(val, val));
+        }
+      });
+    }
   }
+  buildOrgChart();
 }
+
 function handleHRType(sel) {
   if(sel.value === '__other__') {
     const val = prompt('أدخل النوع الجديد:');
     if(val && !extraHRTypes.includes(val)) extraHRTypes.push(val);
   }
+  buildOrgChart();
 }
 
 function calcHRRow(n) {
@@ -1136,28 +1159,68 @@ function delHRRow(n) {
 
 function buildOrgChart() {
   const container = document.getElementById('orgChartInner');
-  const managers = [];
-  const others = [];
+  const nodes = [];
+  
+  // جمع البيانات من الجدول
   document.querySelectorAll('[id^="hrr_"]').forEach(tr => {
     const id = tr.id.replace('hrr_','');
     const pos = document.getElementById('hrpos_'+id)?.value || '';
     const type = document.getElementById('hrtype_'+id)?.value || '';
     const qty = document.getElementById('hrqty_'+id)?.value || '1';
-    const reports = document.getElementById('hrreports_'+id)?.value || '';
+    const reportsTo = document.getElementById('hrreports_'+id)?.value || '';
     if(!pos || pos === '__other__') return;
-    const entry = {pos, type, qty: parseInt(qty)||1, reports};
-    if(type === 'إداري' || pos === 'مدير' || !reports) managers.push(entry);
-    else others.push(entry);
+    nodes.push({ id, pos, type, qty: parseInt(qty)||1, reportsTo });
   });
-  let html = '';
-  if(managers.length) {
-    html += '<div class="org-row">' + managers.map(m=>`<div class="org-node">👤 ${m.pos} (${m.qty})</div>`).join('') + '</div>';
+
+  if(nodes.length === 0) {
+    container.innerHTML = '<p style="color:var(--text-muted);font-size:13px">أضف موظفين لعرض الهيكل التنظيمي.</p>';
+    return;
   }
-  if(others.length) {
-    html += '<div style="text-align:center;color:var(--border);font-size:18px">│</div>';
-    html += '<div class="org-row">' + others.map(o=>`<div class="org-node" style="background:var(--primary-light)">👤 ${o.pos} (${o.qty})</div>`).join('') + '</div>';
-  }
-  container.innerHTML = html || '<p style="color:var(--text-muted);font-size:13px">أضف موظفين لعرض الهيكل التنظيمي.</p>';
+
+  // بناء هيكلية الشجرة حسب "تابع لـ"
+  const tree = [];
+  const lookup = {};
+  nodes.forEach(n => { lookup[n.pos] = { ...n, children: [] }; });
+
+  nodes.forEach(n => {
+    if (n.reportsTo && lookup[n.reportsTo]) {
+      lookup[n.reportsTo].children.push(lookup[n.pos]);
+    } else {
+      tree.push(lookup[n.pos]); // إذا لم يكن تابعاً لأحد، فهو رأس شجرة
+    }
+  });
+
+  // تحديد الألوان بناءً على النوع
+  const getColor = (type) => {
+    if(type === 'إداري') return '#2563a8'; // أزرق
+    if(type === 'تنفيذي') return '#16a34a'; // أخضر
+    if(type === 'مزود خدمة') return '#d97706'; // برتقالي
+    return '#475569'; // رمادي
+  };
+
+  // دالة متكررة (Recursive) لرسم العُقد
+  const renderNode = (node) => {
+    const bg = getColor(node.type);
+    let html = `<li>`;
+    html += `<div class="node-card" style="background:${bg}; border: 2px solid rgba(255,255,255,0.2);">
+                <div style="font-size:14px; font-weight:700; margin-bottom:4px">👤 ${node.pos} (${node.qty})</div>
+                <div style="font-size:10px; background:rgba(0,0,0,0.25); border-radius:4px; padding:2px 8px; display:inline-block">${node.type}</div>
+             </div>`;
+    if (node.children.length > 0) {
+      html += `<ul>`;
+      node.children.forEach(child => { html += renderNode(child); });
+      html += `</ul>`;
+    }
+    html += `</li>`;
+    return html;
+  };
+
+  // تجميع الشجرة النهائية
+  let finalHtml = `<div class="org-tree"><ul>`;
+  tree.forEach(root => { finalHtml += renderNode(root); });
+  finalHtml += `</ul></div>`;
+
+  container.innerHTML = finalHtml;
 }
 
 // ─── SUBMIT ───────────────────────────────────────────────
@@ -1182,7 +1245,6 @@ async function submitForm() {
 }
 
 function collectFormData() {
-  // Founding rows
   const foundingRows = [];
   document.querySelectorAll('[id^="fr_"]').forEach(tr => {
     const n = tr.id.replace('fr_','');
@@ -1197,13 +1259,11 @@ function collectFormData() {
     });
   });
 
-  // Products
   const prods = {};
   Object.keys(products).forEach(pid => {
     if(products[pid].name) prods[pid] = products[pid];
   });
 
-  // Revenue (monthly)
   const revenueData = {};
   Object.keys(products).filter(p=>products[p].name).forEach(pid => {
     revenueData[pid] = MONTHS.map((_,m) => ({
@@ -1213,7 +1273,6 @@ function collectFormData() {
     }));
   });
 
-  // Fixed
   const fixedRows = [];
   document.querySelectorAll('[id^="fxr_"]').forEach(tr => {
     const n = tr.id.replace('fxr_','');
@@ -1227,7 +1286,6 @@ function collectFormData() {
     });
   });
 
-  // HR
   const hrRows = [];
   document.querySelectorAll('[id^="hrr_"]').forEach(tr => {
     const n = tr.id.replace('hrr_','');
@@ -1242,7 +1300,9 @@ function collectFormData() {
   });
 
   return {
-    projectIdea: document.getElementById('projectIdea').value,
+    submitterName: document.getElementById('submitterName')?.value || '',
+    submitterPhone: document.getElementById('submitterPhone')?.value || '',
+    projectIdea: document.getElementById('projectIdea')?.value || '',
     foundingRows,
     products: prods,
     revenueData,
@@ -1263,7 +1323,6 @@ function collectFormData() {
 
 // ─── INIT ────────────────────────────────────────────────
 buildProgress();
-// Add initial rows
 addFoundingRow(); addFoundingRow(); addFoundingRow();
 addFixedRow(); addFixedRow();
 addHRRow();
