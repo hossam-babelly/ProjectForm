@@ -63,8 +63,9 @@
   .step-dot {
     display: flex; align-items: center; gap: 6px;
     cursor: pointer; user-select: none;
-    transition: opacity .2s;
+    transition: all .2s;
   }
+  .step-dot:hover .dot-circle { transform: scale(1.1); background: rgba(255,255,255,0.25); }
   .step-dot:not(:last-child)::after {
     content: '';
     width: 30px; height: 2px;
@@ -595,7 +596,7 @@ function buildProgress() {
     const div = document.createElement('div');
     div.className = 'step-dot' + (step === currentStep ? ' active' : step < currentStep ? ' done' : '');
     div.innerHTML = `<div class="dot-circle">${step < currentStep ? '✓' : step}</div><span class="dot-label">${l}</span>`;
-    div.onclick = () => { if(step <= currentStep || step === currentStep+1) goStep(step); };
+    div.onclick = () => { goStep(step); }; // <-- التعديل هنا: حرية التنقل بالنقر على أي خطوة
     bar.appendChild(div);
   });
 }
@@ -611,7 +612,7 @@ function goStep(n) {
   buildProgress();
   if(n === 4) buildRevenueTable();
   if(n === 5) buildOpsTable();
-  if(n === 8) buildDepTable(); // الاهتلاك صار خطوة 8
+  if(n === 8) buildDepTable();
   window.scrollTo({top: 0, behavior:'smooth'});
 }
 
@@ -773,12 +774,12 @@ function calcRevenue(pid, m) {
   const mel = document.getElementById(`rev_month_${m}`);
   if(mel) mel.value = fmtMoney(mTot);
   
-  // تحديث التلميحات في التكاليف التشغيلية
+  // <-- التعديل هنا: تحديث تلميح سعر المبيع في الجدول التشغيلي بدلاً من الكمية
   const p = products[pid];
   const comps = p?.components.filter(c=>c) || [];
   comps.forEach((_, ci) => {
      const hintEl = document.getElementById(`hint_${pid}_${ci}_${m}`);
-     if (hintEl) hintEl.textContent = qty;
+     if (hintEl) hintEl.textContent = up;
   });
 
   calcOps(pid);
@@ -802,12 +803,13 @@ function buildOpsTable() {
     comps.forEach((comp, ci) => {
       const tr = document.createElement('tr');
       if(ci === 0) tr.innerHTML = `<td rowspan="${comps.length}" style="font-weight:700;text-align:right;padding-right:10px;vertical-align:top">${p.name}</td><td rowspan="${comps.length}" style="text-align:center;vertical-align:top">${p.unit}</td>`;
+      // <-- التعديل هنا: التلميح يعرض سعر المبيع بدلاً من الكمية
       tr.innerHTML += `<td style="text-align:right;padding-right:8px;font-size:13px">${comp}</td>` +
         MONTHS.map((_,m) => {
-          const revQty = parseFloat(document.getElementById(`rev_qty_${pid}_${m}`)?.value) || 0;
+          const revUprice = parseFloat(document.getElementById(`rev_uprice_${pid}_${m}`)?.value) || 0;
           return `<td>
             <input type="number" id="ops_${pid}_${ci}_${m}" min="0" value="0" oninput="calcOps(${pid})" style="margin-bottom:2px">
-            <div style="font-size:10px; color:var(--text-muted); background:var(--section-bg); border-radius:4px; padding:2px; text-align:center;">📦 الكمية: <span id="hint_${pid}_${ci}_${m}" style="font-weight:700;color:var(--primary)">${revQty}</span></div>
+            <div style="font-size:10px; color:var(--text-muted); background:var(--section-bg); border-radius:4px; padding:2px; text-align:center;">💵 السعر: <span id="hint_${pid}_${ci}_${m}" style="font-weight:700;color:var(--primary)">${revUprice}</span>$</div>
           </td>`;
         }).join('');
       tbody.appendChild(tr);
@@ -844,7 +846,7 @@ function calcOpsAnnual() {
   return total || 0;
 }
 
-// ─── HR TABLE (الآن أصبحت قبل التكاليف الثابتة) ─────────
+// ─── HR TABLE ───────────────────────────────────────────
 let hrRowCount = 0;
 function addHRRow() {
   hrRowCount++;
@@ -908,7 +910,6 @@ function calcHRTotal() {
   document.querySelectorAll('[id^="hrtotal_"]').forEach(el => { total += parseMoney(el.value); });
   document.getElementById('hrTotal').value = fmtMoney(total);
   
-  // -- الربط الآلي مع السطر الأول من التكاليف الثابتة --
   const fxPrice1 = document.getElementById('fxprice_1');
   if(fxPrice1) {
       document.getElementById('fxcat_1').value = 'رواتب';
@@ -947,9 +948,12 @@ function delHRRow(n) {
   buildOrgChart();
 }
 
+// <-- التعديل هنا: خوارزمية رسم الهيكل التنظيمي المستقل لكل سطر
 function buildOrgChart() {
   const container = document.getElementById('orgChartInner');
   const nodes = [];
+  
+  // جمع البيانات برمجياً لكل سطر ككيان مستقل (برقم ID الخاص به)
   document.querySelectorAll('[id^="hrr_"]').forEach(tr => {
     const id = tr.id.replace('hrr_','');
     const pos = document.getElementById('hrpos_'+id)?.value || '';
@@ -957,7 +961,7 @@ function buildOrgChart() {
     const qty = document.getElementById('hrqty_'+id)?.value || '1';
     const reportsTo = document.getElementById('hrreports_'+id)?.value || '';
     if(!pos || pos === '__other__') return;
-    nodes.push({ id, pos, type, qty: Math.max(1, parseInt(qty)||1), reportsTo });
+    nodes.push({ id, pos, type, qty: Math.max(1, parseInt(qty)||1), reportsTo, children: [] });
   });
 
   if(nodes.length === 0) {
@@ -965,12 +969,19 @@ function buildOrgChart() {
     return;
   }
 
+  // بناء الشجرة (يبحث عن أول أب يطابق اسم التبعية)
   const tree = [];
-  const lookup = {};
-  nodes.forEach(n => { lookup[n.pos] = { ...n, children: [] }; });
   nodes.forEach(n => {
-    if (n.reportsTo && lookup[n.reportsTo]) lookup[n.reportsTo].children.push(lookup[n.pos]);
-    else tree.push(lookup[n.pos]);
+    if (n.reportsTo) {
+      const parent = nodes.find(p => p.pos === n.reportsTo);
+      if (parent) {
+        parent.children.push(n);
+      } else {
+        tree.push(n);
+      }
+    } else {
+      tree.push(n);
+    }
   });
 
   const getColor = (type) => {
@@ -983,7 +994,7 @@ function buildOrgChart() {
   const renderNode = (node) => {
     const bg = getColor(node.type);
     let cardsHtml = `<div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap; padding:0 10px;">`;
-    // تكرار رسم العنصر بناءً على العدد وبدون أي رقم
+    // رسم البطاقات حسب العدد بدون أرقام
     for(let i=0; i<node.qty; i++) {
       cardsHtml += `<div class="node-card" style="background:${bg}; border: 2px solid rgba(255,255,255,0.2);">
           <div style="font-size:14px; font-weight:700; margin-bottom:4px">👤 ${node.pos}</div>
@@ -1019,7 +1030,6 @@ function addFixedRow() {
   const cats = [...FIXED_CATS, ...extraFixedCats];
   const opts = cats.map(c=>`<option>${c}</option>`).join('') + `<option value="__other__">أخرى (إضافة جديد)</option>`;
   
-  // السطر الأول لا يمكن حذفه
   const delBtn = n === 1 ? '' : `<button type="button" class="del-btn" onclick="delFixedRow(${n})">🗑</button>`;
   
   tr.innerHTML = `
@@ -1182,7 +1192,7 @@ function collectFormData() {
     foundingRows,
     products: prods,
     revenueData,
-    hrRows,      // تم تعديل الترتيب ليطابق واجهة المستخدم
+    hrRows,
     fixedRows,
     summary: {
       foundingTotal: document.getElementById('sum_founding').textContent,
@@ -1200,7 +1210,7 @@ function collectFormData() {
 // ─── INIT ────────────────────────────────────────────────
 buildProgress();
 addFoundingRow(); addFoundingRow(); addFoundingRow();
-addFixedRow(); addFixedRow(); // السطر الأول سيكون مقفلاً للرواتب تلقائياً عند إضافة الموارد البشرية
+addFixedRow(); addFixedRow();
 addHRRow(); 
 </script>
 </body>
