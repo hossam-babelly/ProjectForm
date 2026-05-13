@@ -44,7 +44,7 @@ function saveIndex(index) {
 const MONTHS = ['شهر 1','شهر 2','شهر 3','شهر 4','شهر 5','شهر 6', 'شهر 7','شهر 8','شهر 9','شهر 10','شهر 11','شهر 12'];
 
 // ════════════════════════════════════════════════════════════
-//  EXCEL GENERATOR (PREMIUM)
+//  EXCEL GENERATOR
 // ════════════════════════════════════════════════════════════
 async function generateExcel(data) {
   const wb = new ExcelJS.Workbook();
@@ -53,7 +53,6 @@ async function generateExcel(data) {
 
   const C_HEADER = '1A3A5C';
   const C_ACCENT = 'C8A84B';
-  const C_SUBTOT = 'EAF0F8';
   const C_TOTAL  = 'D1DBE8';
   const C_ZEBRA  = 'F4F7FA';
 
@@ -104,6 +103,8 @@ async function generateExcel(data) {
   s0.getRow(2).height = 25;
 
   const summaryData = [
+    ['اسم مقدم المشروع', data.submitterName||''],
+    ['رقم الهاتف', data.submitterPhone||''],
     ['فكرة المشروع', data.projectIdea||''],
     ['إجمالي التكاليف التأسيسية', data.summary?.foundingTotal||'$0'],
     ['إجمالي الإيرادات المتوقعة (سنوياً)', data.summary?.revenueAnnual||'$0'],
@@ -124,14 +125,13 @@ async function generateExcel(data) {
     
     r.getCell(2).value = String(val);
     r.getCell(2).alignment = { horizontal:'center', vertical:'middle', readingOrder:2 };
-    r.getCell(2).font  = { bold: i===6, name:'Arial', size:12, color: i===6 ? {argb:'FF16A34A'} : {argb:'FF000000'} };
+    r.getCell(2).font  = { bold: i===8, name:'Arial', size:12, color: i===8 ? {argb:'FF16A34A'} : {argb:'FF000000'} };
     
     [1,2].forEach(c => {
       r.getCell(c).border = { top:{style:'thin', color:{argb:'FFD1DBE8'}}, bottom:{style:'thin', color:{argb:'FFD1DBE8'}}, left:{style:'thin', color:{argb:'FFD1DBE8'}}, right:{style:'thin', color:{argb:'FFD1DBE8'}} };
     });
   });
 
-  // ── Helper to build standard sheets ──────────────────────
   function buildDataSheet(name, columns, headers, rowsData, totalRowData) {
     const sheet = wb.addWorksheet(name, { views: [{ rightToLeft:true, state:'frozen', ySplit:1 }] });
     sheet.columns = columns.map(w => ({width:w}));
@@ -170,7 +170,6 @@ async function generateExcel(data) {
     }
   }
 
-  // ── Sheet 2: التكاليف التأسيسية ────────────────────────
   if (data.foundingRows?.length) {
     let tot = 0;
     const rData = data.foundingRows.map((r,i) => {
@@ -183,7 +182,6 @@ async function generateExcel(data) {
       rData, ['الإجمالي المالي للتأسيس', null, null, null, null, null, null, tot]);
   }
 
-  // ── Sheet 3: التكاليف الثابتة ─────────────────────────
   if (data.fixedRows?.length) {
     let tot = 0;
     const rData = data.fixedRows.map((r,i) => {
@@ -196,7 +194,6 @@ async function generateExcel(data) {
       rData, ['الإجمالي الشهري', null, null, null, null, null, tot]);
   }
 
-  // ── Sheet 4: الموارد البشرية ──────────────────────────
   if (data.hrRows?.length) {
     let tot = 0;
     const rData = data.hrRows.map((r,i) => {
@@ -213,7 +210,7 @@ async function generateExcel(data) {
 }
 
 // ════════════════════════════════════════════════════════════
-//  WORD GENERATOR (PREMIUM)
+//  WORD GENERATOR
 // ════════════════════════════════════════════════════════════
 function sectionTitle(title) {
   return new Paragraph({
@@ -257,19 +254,18 @@ function makeProTable(headers, rowsData) {
 }
 
 async function generateWord(data) {
-  const pids = Object.keys(data.products||{}).filter(p=>data.products[p]?.name);
   const ch = [];
 
-  // Cover Page
   ch.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 2500, after: 400 }, children: [new TextRun({ text: "دراسة مشروع", bold: true, size: 64, color: "1A3A5C", font:"Arial" })] }));
   ch.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 1200 }, children: [new TextRun({ text: data.projectIdea || 'غير محدد', bold: true, size: 36, color: "C8A84B", font:"Arial" })] }));
   ch.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 200 }, children: [new TextRun({ text: "تاريخ الإرسال: " + new Date(data.submittedAt||Date.now()).toLocaleString('ar-SA'), size: 24, color: "555555", font:"Arial" })] }));
   ch.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 200 }, children: [new TextRun({ text: "رقم الطلب: " + (data.id||"---"), size: 20, color: "888888", font:"Arial" })] }));
   ch.push(new Paragraph({ pageBreakBefore: true }));
 
-  // Summary
   ch.push(sectionTitle('ملخص معلومات المشروع'));
   ch.push(makeProTable(['البند','القيمة'], [
+    ['اسم مقدم المشروع', data.submitterName||''],
+    ['رقم الهاتف', data.submitterPhone||''],
     ['فكرة المشروع', data.projectIdea||''],
     ['إجمالي التكاليف التأسيسية', data.summary?.foundingTotal||'$0'],
     ['إجمالي الإيرادات السنوية', data.summary?.revenueAnnual||'$0'],
@@ -280,7 +276,6 @@ async function generateWord(data) {
     ['عدد الموظفين', data.summary?.employees||'0'],
   ]));
 
-  // Founding
   if (data.foundingRows?.length) {
     ch.push(sectionTitle('التكاليف التأسيسية'));
     ch.push(makeProTable(['#','الصنف','البيان','العدد','التكلفة للواحدة','الإجمالي'], 
@@ -288,7 +283,6 @@ async function generateWord(data) {
     ));
   }
 
-  // Fixed
   if (data.fixedRows?.length) {
     ch.push(sectionTitle('التكاليف الثابتة (الشهرية)'));
     ch.push(makeProTable(['#','الصنف','البيان','العدد','الواحدة','الإجمالي'], 
@@ -296,7 +290,6 @@ async function generateWord(data) {
     ));
   }
 
-  // HR
   if (data.hrRows?.length) {
     ch.push(sectionTitle('الموارد البشرية'));
     ch.push(makeProTable(['#','المنصب','النوع','العدد','الراتب','الإجمالي'], 
@@ -344,7 +337,7 @@ async function generateWord(data) {
 }
 
 // ════════════════════════════════════════════════════════════
-//  ROUTES & SERVER
+//  ROUTES
 // ════════════════════════════════════════════════════════════
 app.post('/api/submit', async (req, res) => {
   try {
