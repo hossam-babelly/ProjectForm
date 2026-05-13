@@ -1,7 +1,6 @@
 /**
  * ─────────────────────────────────────────────────────────────
- * نموذج طرح دراسة مشروع — Backend Server v3 (Premium Edition)
- * Express · docx · ExcelJS · Nodemailer
+ * نموذج طرح دراسة مشروع — Backend Server v3.5 (Premium + HR Update)
  * ─────────────────────────────────────────────────────────────
  */
 
@@ -10,13 +9,12 @@ const cors       = require('cors');
 const fs         = require('fs');
 const path       = require('path');
 const crypto     = require('crypto');
-const nodemailer = require('nodemailer');
 const ExcelJS    = require('exceljs');
 const {
   Document, Packer, Paragraph, TextRun,
   Table, TableRow, TableCell,
   AlignmentType, WidthType,
-  HeadingLevel, ShadingType, BorderStyle,
+  HeadingLevel, BorderStyle,
   Header, Footer, PageNumber
 } = require('docx');
 
@@ -41,7 +39,6 @@ function loadIndex() {
 function saveIndex(index) {
   fs.writeFileSync(path.join(DATA_DIR, 'index.json'), JSON.stringify(index, null, 2), 'utf8');
 }
-const MONTHS = ['شهر 1','شهر 2','شهر 3','شهر 4','شهر 5','شهر 6', 'شهر 7','شهر 8','شهر 9','شهر 10','شهر 11','شهر 12'];
 
 // ════════════════════════════════════════════════════════════
 //  EXCEL GENERATOR
@@ -170,6 +167,7 @@ async function generateExcel(data) {
     }
   }
 
+  // التأسيسية
   if (data.foundingRows?.length) {
     let tot = 0;
     const rData = data.foundingRows.map((r,i) => {
@@ -182,18 +180,7 @@ async function generateExcel(data) {
       rData, ['الإجمالي المالي للتأسيس', null, null, null, null, null, null, tot]);
   }
 
-  if (data.fixedRows?.length) {
-    let tot = 0;
-    const rData = data.fixedRows.map((r,i) => {
-      const v = parseFloat(String(r.total||'0').replace(/[^0-9.]/g,''))||0;
-      tot += v;
-      return [i+1, r.cat, r.bayan, parseFloat(r.qty)||0, r.notes, parseFloat(r.price)||0, v];
-    });
-    buildDataSheet('التكاليف الثابتة', [8,18,28,10,22,25,25], 
-      ['#','الصنف','البيان','العدد','ملاحظات','التكلفة الشهرية للواحدة ($)','التكلفة الشهرية الإجمالية ($)'], 
-      rData, ['الإجمالي الشهري', null, null, null, null, null, tot]);
-  }
-
+  // الموارد البشرية (الآن تأتي قبل التكاليف الثابتة)
   if (data.hrRows?.length) {
     let tot = 0;
     const rData = data.hrRows.map((r,i) => {
@@ -204,6 +191,19 @@ async function generateExcel(data) {
     buildDataSheet('الموارد البشرية', [8,22,18,10,22,25,25], 
       ['#','المنصب','النوع','العدد','تابع لـ','الراتب الشهري الفردي ($)','الراتب الشهري الإجمالي ($)'], 
       rData, ['إجمالي الرواتب الشهري', null, null, null, null, null, tot]);
+  }
+
+  // التكاليف الثابتة
+  if (data.fixedRows?.length) {
+    let tot = 0;
+    const rData = data.fixedRows.map((r,i) => {
+      const v = parseFloat(String(r.total||'0').replace(/[^0-9.]/g,''))||0;
+      tot += v;
+      return [i+1, r.cat, r.bayan, parseFloat(r.qty)||0, r.notes, parseFloat(r.price)||0, v];
+    });
+    buildDataSheet('التكاليف الثابتة', [8,18,28,10,22,25,25], 
+      ['#','الصنف','البيان','العدد','ملاحظات','التكلفة الشهرية للواحدة ($)','التكلفة الشهرية الإجمالية ($)'], 
+      rData, ['الإجمالي الشهري', null, null, null, null, null, tot]);
   }
 
   return wb.xlsx.writeBuffer();
@@ -283,17 +283,18 @@ async function generateWord(data) {
     ));
   }
 
-  if (data.fixedRows?.length) {
-    ch.push(sectionTitle('التكاليف الثابتة (الشهرية)'));
-    ch.push(makeProTable(['#','الصنف','البيان','العدد','الواحدة','الإجمالي'], 
-      data.fixedRows.map((r,i)=>[i+1, r.cat, r.bayan, r.qty, r.price, r.total])
-    ));
-  }
-
+  // الموارد البشرية تسبق التكاليف الثابتة
   if (data.hrRows?.length) {
     ch.push(sectionTitle('الموارد البشرية'));
     ch.push(makeProTable(['#','المنصب','النوع','العدد','الراتب','الإجمالي'], 
       data.hrRows.map((r,i)=>[i+1, r.position, r.type, r.qty, r.salary, r.total])
+    ));
+  }
+
+  if (data.fixedRows?.length) {
+    ch.push(sectionTitle('التكاليف الثابتة (الشهرية)'));
+    ch.push(makeProTable(['#','الصنف','البيان','العدد','الواحدة','الإجمالي'], 
+      data.fixedRows.map((r,i)=>[i+1, r.cat, r.bayan, r.qty, r.price, r.total])
     ));
   }
 
