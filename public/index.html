@@ -270,12 +270,25 @@
 
   /* ORG CHART */
   #orgChart { margin-top: 20px; overflow-x: auto; }
-  .org-node {
-    display: inline-block; background: var(--primary);
-    color: white; border-radius: 8px; padding: 8px 16px;
-    font-size: 12px; font-weight: 600; white-space: nowrap;
-    margin: 4px;
+  .org-tree { display: flex; justify-content: center; gap: 16px; flex-wrap: wrap; padding: 10px 0; }
+  .org-node-wrap { display: flex; flex-direction: column; align-items: center; position: relative; }
+  .org-node-box {
+    border-radius: 10px; padding: 10px 16px; min-width: 120px; max-width: 160px;
+    text-align: center; box-shadow: 0 3px 10px rgba(0,0,0,.18);
+    cursor: default; transition: transform .15s;
+    position: relative; z-index: 1;
   }
+  .org-node-box:hover { transform: translateY(-2px); }
+  .org-node-pos { font-size: 13px; font-weight: 700; line-height: 1.3; }
+  .org-node-type { font-size: 11px; opacity: .85; margin-top: 3px; }
+  .org-children { display: flex; flex-direction: column; align-items: center; }
+  .org-vert-line { width: 2px; height: 22px; background: var(--border); }
+  .org-children-row { display: flex; gap: 12px; align-items: flex-start; justify-content: center; flex-wrap: wrap; position: relative; }
+  .org-children-row::before {
+    content: ''; position: absolute; top: 0; left: 10%; right: 10%;
+    height: 2px; background: var(--border);
+  }
+  .org-node-wrap:only-child .org-children-row::before { display: none; }
   .org-row { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
 
   @media (max-width: 640px) {
@@ -343,28 +356,18 @@
   <!-- FORM -->
   <form id="mainForm" novalidate>
 
-    <!-- STEP 1: المعلومات الأساسية -->
+    <!-- STEP 1: فكرة المشروع -->
     <div class="section-card active" data-step="1">
       <div class="section-header">
         <div class="s-icon">1</div>
         <div>
-          <h3>المعلومات الأساسية</h3>
-          <p>أدخل فكرة المشروع وبيانات المقدم</p>
+          <h3>فكرة المشروع</h3>
+          <p>أدخل وصفاً موجزاً لفكرة المشروع</p>
         </div>
       </div>
       <div class="section-body">
         <label for="projectIdea">فكرة المشروع *</label>
         <textarea id="projectIdea" name="projectIdea" rows="4" placeholder="اكتب هنا وصفاً لفكرة المشروع..." oninput="updateSummary()"></textarea>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
-          <div>
-            <label for="applicantName">اسم مقدم المشروع *</label>
-            <input type="text" id="applicantName" name="applicantName" placeholder="الاسم الكامل">
-          </div>
-          <div>
-            <label for="applicantPhone">رقم الهاتف *</label>
-            <input type="text" id="applicantPhone" name="applicantPhone" placeholder="مثال: 0955123789">
-          </div>
-        </div>
       </div>
     </div>
 
@@ -474,93 +477,10 @@
       </div>
     </div>
 
-    <!-- STEP 6: التكاليف الثابتة -->
+    <!-- STEP 6: الموارد البشرية -->
     <div class="section-card" data-step="6">
       <div class="section-header">
         <div class="s-icon">6</div>
-        <div>
-          <h3>التكاليف الثابتة</h3>
-          <p>أدخل التكاليف الثابتة الشهرية</p>
-        </div>
-      </div>
-      <div class="section-body">
-        <div class="note-box">
-          ✏️ عمود <strong>الصنف</strong>: رواتب، وقود، فواتير، منظفات، أخرى.<br>
-          ✏️ <strong>التكلفة الشهرية الإجمالية</strong> = العدد × التكلفة الشهرية للواحدة.
-        </div>
-        <div style="overflow-x:auto">
-          <table class="dyn-table" id="fixedTable">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>الصنف</th>
-                <th>البيان</th>
-                <th>العدد</th>
-                <th>ملاحظات</th>
-                <th>التكلفة الشهرية للواحدة ($)</th>
-                <th>التكلفة الشهرية الإجمالية ($)</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody id="fixedBody"></tbody>
-            <tfoot>
-              <tr class="total-row">
-                <td colspan="6" style="text-align:right;padding-right:12px">الإجمالي (شهري)</td>
-                <td><input type="text" class="computed" id="fixedTotal" readonly value="$0"></td>
-                <td></td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-        <button type="button" class="add-row-btn" onclick="addFixedRow()">➕ إضافة سطر</button>
-      </div>
-    </div>
-
-    <!-- STEP 7: الاهتلاك -->
-    <div class="section-card" data-step="7">
-      <div class="section-header">
-        <div class="s-icon">7</div>
-        <div>
-          <h3>جدول الاهتلاك</h3>
-          <p>يتم تعبئته تلقائياً من التكاليف التأسيسية</p>
-        </div>
-      </div>
-      <div class="section-body">
-        <div class="note-box">
-          ✏️ البنود هنا مأخوذة تلقائياً من التكاليف التأسيسية (البنود التي عليها ✓ اهتلاك).<br>
-          ✏️ أدخل نسبة الاهتلاك (%) وتُحسب القيم تلقائياً.
-        </div>
-        <div style="overflow-x:auto">
-          <table class="dyn-table" id="depTable">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>الصنف</th>
-                <th>البيان</th>
-                <th>نسبة الاهتلاك (%)</th>
-                <th>العدد</th>
-                <th>ملاحظات</th>
-                <th>قيمة الاهتلاك للواحدة ($)</th>
-                <th>قيمة الاهتلاك الإجمالية ($)</th>
-              </tr>
-            </thead>
-            <tbody id="depBody"></tbody>
-            <tfoot>
-              <tr class="total-row">
-                <td colspan="7" style="text-align:right;padding-right:12px">إجمالي قيمة الاهتلاك</td>
-                <td><input type="text" class="computed" id="depTotal" readonly value="$0"></td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-        <p style="font-size:12px;color:var(--text-muted);margin-top:8px">لإضافة بنود جديدة للاهتلاك، ارجع لجدول التكاليف التأسيسية وضع علامة ✓ في خانة الاهتلاك.</p>
-      </div>
-    </div>
-
-    <!-- STEP 8: الموارد البشرية -->
-    <div class="section-card" data-step="8">
-      <div class="section-header">
-        <div class="s-icon">8</div>
         <div>
           <h3>الموارد البشرية</h3>
           <p>أدخل بيانات الموظفين والرواتب</p>
@@ -601,6 +521,89 @@
           <div style="font-size:13px;font-weight:700;color:var(--primary);margin-bottom:10px">🏗️ الهيكل التنظيمي</div>
           <div id="orgChartInner"></div>
         </div>
+      </div>
+    </div>
+
+    <!-- STEP 7: التكاليف الثابتة -->
+    <div class="section-card" data-step="7">
+      <div class="section-header">
+        <div class="s-icon">7</div>
+        <div>
+          <h3>التكاليف الثابتة</h3>
+          <p>أدخل التكاليف الثابتة الشهرية</p>
+        </div>
+      </div>
+      <div class="section-body">
+        <div class="note-box">
+          ✏️ عمود <strong>الصنف</strong>: رواتب، وقود، فواتير، منظفات، أخرى.<br>
+          ✏️ <strong>التكلفة الشهرية الإجمالية</strong> = العدد × التكلفة الشهرية للواحدة.
+        </div>
+        <div style="overflow-x:auto">
+          <table class="dyn-table" id="fixedTable">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>الصنف</th>
+                <th>البيان</th>
+                <th>العدد</th>
+                <th>ملاحظات</th>
+                <th>التكلفة الشهرية للواحدة ($)</th>
+                <th>التكلفة الشهرية الإجمالية ($)</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="fixedBody"></tbody>
+            <tfoot>
+              <tr class="total-row">
+                <td colspan="6" style="text-align:right;padding-right:12px">الإجمالي (شهري)</td>
+                <td><input type="text" class="computed" id="fixedTotal" readonly value="$0"></td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <button type="button" class="add-row-btn" onclick="addFixedRow()">➕ إضافة سطر</button>
+      </div>
+    </div>
+
+    <!-- STEP 8: الاهتلاك -->
+    <div class="section-card" data-step="8">
+      <div class="section-header">
+        <div class="s-icon">8</div>
+        <div>
+          <h3>جدول الاهتلاك</h3>
+          <p>يتم تعبئته تلقائياً من التكاليف التأسيسية</p>
+        </div>
+      </div>
+      <div class="section-body">
+        <div class="note-box">
+          ✏️ البنود هنا مأخوذة تلقائياً من التكاليف التأسيسية (البنود التي عليها ✓ اهتلاك).<br>
+          ✏️ أدخل نسبة الاهتلاك (%) وتُحسب القيم تلقائياً.
+        </div>
+        <div style="overflow-x:auto">
+          <table class="dyn-table" id="depTable">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>الصنف</th>
+                <th>البيان</th>
+                <th>نسبة الاهتلاك (%)</th>
+                <th>العدد</th>
+                <th>ملاحظات</th>
+                <th>قيمة الاهتلاك للواحدة ($)</th>
+                <th>قيمة الاهتلاك الإجمالية ($)</th>
+              </tr>
+            </thead>
+            <tbody id="depBody"></tbody>
+            <tfoot>
+              <tr class="total-row">
+                <td colspan="7" style="text-align:right;padding-right:12px">إجمالي قيمة الاهتلاك</td>
+                <td><input type="text" class="computed" id="depTotal" readonly value="$0"></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <p style="font-size:12px;color:var(--text-muted);margin-top:8px">لإضافة بنود جديدة للاهتلاك، ارجع لجدول التكاليف التأسيسية وضع علامة ✓ في خانة الاهتلاك.</p>
       </div>
     </div>
 
@@ -649,7 +652,7 @@ function parseMoney(s) {
 
 // ─── STEP NAVIGATION ─────────────────────────────────────
 function buildProgress() {
-  const labels = ['المعلومات الأساسية','التكاليف التأسيسية','المنتجات','الإيرادات','التكاليف التشغيلية','التكاليف الثابتة','الاهتلاك','الموارد البشرية'];
+  const labels = ['المعلومات الأساسية','التكاليف التأسيسية','المنتجات','الإيرادات','التكاليف التشغيلية','الموارد البشرية','التكاليف الثابتة','الاهتلاك'];
   const bar = document.getElementById('progressBar');
   bar.innerHTML = '';
   labels.forEach((l,i) => {
@@ -673,7 +676,8 @@ function goStep(n) {
   buildProgress();
   if(n === 4) buildRevenueTable();
   if(n === 5) buildOpsTable();
-  if(n === 7) buildDepTable();
+  if(n === 7) syncSalaryToFixed();
+  if(n === 8) buildDepTable();
   window.scrollTo({top: 0, behavior:'smooth'});
 }
 
@@ -927,7 +931,7 @@ function buildOpsTable() {
     const sttr = document.createElement('tr');
     sttr.className = 'total-row';
     sttr.innerHTML = `<td colspan="3" style="text-align:right;padding-right:10px">إجمالي ${p.name}</td>` +
-      MONTHS.map((_,m) => `<td><input type="text" class="computed" id="ops_sub_${pid}_${m}" readonly value="$0"></td>`).join('');
+      MONTHS.map((_,m) => `<td><input type="text" class="computed" id="ops_sub_${pid}_${m}" readonly value="$0" title="إيرادات ${p.name} في هذا الشهر: " style="cursor:help"></td>`).join('');
     tbody.appendChild(sttr);
   });
 
@@ -941,12 +945,19 @@ function calcOps(pid) {
   const p = products[pid];
   const comps = p.components.filter(c=>c);
   for(let m=0; m<12; m++) {
-    let sub = 0;
+    let compSum = 0;
     comps.forEach((_,ci) => {
-      sub += parseFloat(document.getElementById(`ops_${pid}_${ci}_${m}`)?.value) || 0;
+      compSum += parseFloat(document.getElementById(`ops_${pid}_${ci}_${m}`)?.value) || 0;
     });
+    // multiply by qty from revenue table
+    const qty = parseFloat(document.getElementById(`rev_qty_${pid}_${m}`)?.value) || 0;
+    const sub = compSum * qty;
     const sel = document.getElementById(`ops_sub_${pid}_${m}`);
-    if(sel) sel.value = fmtMoney(sub);
+    if(sel) {
+      sel.value = fmtMoney(sub);
+      const revTotal = parseMoney(document.getElementById(`rev_total_${pid}_${m}`)?.value || 0);
+      sel.title = `إيرادات ${products[pid]?.name || ''} في هذا الشهر: ${fmtMoney(revTotal)}`;
+    }
   }
   // grand total per month
   for(let m=0; m<12; m++) {
@@ -1134,6 +1145,30 @@ function calcHRTotal() {
   let total = 0;
   document.querySelectorAll('[id^="hrtotal_"]').forEach(el => { total += parseMoney(el.value); });
   document.getElementById('hrTotal').value = fmtMoney(total);
+  syncSalaryToFixed();
+}
+
+function syncSalaryToFixed() {
+  const hrTotalVal = parseMoney(document.getElementById('hrTotal')?.value || 0);
+  // Update first fixed row (salary row)
+  const firstFixed = document.querySelector('#fixedBody tr[id^="fxr_"]');
+  if (firstFixed) {
+    const n = firstFixed.id.replace('fxr_','');
+    const priceEl = document.getElementById('fxprice_'+n);
+    const bayEl = document.getElementById('fxbayan_'+n);
+    const catEl = document.getElementById('fxcat_'+n);
+    if (priceEl) {
+      priceEl.value = hrTotalVal;
+      if (bayEl && !bayEl.value) bayEl.value = 'الموظفين';
+      if (catEl) {
+        // set to رواتب if it exists as option
+        for (let opt of catEl.options) {
+          if (opt.value === 'رواتب' || opt.text === 'رواتب') { catEl.value = opt.value; break; }
+        }
+      }
+      calcFixedRow(n);
+    }
+  }
 }
 
 function calcTotalEmployees() {
@@ -1149,30 +1184,76 @@ function delHRRow(n) {
   buildOrgChart();
 }
 
+// Color map per employee type (matching Word org chart theme colors)
+const TYPE_COLORS = {
+  'إداري':       { bg: '#4472C4', text: '#fff' },
+  'تنفيذي':      { bg: '#70AD47', text: '#fff' },
+  'مزود خدمة':  { bg: '#ED7D31', text: '#fff' },
+};
+function getTypeColor(type) {
+  return TYPE_COLORS[type] || { bg: '#5B9BD5', text: '#fff' };
+}
+
 function buildOrgChart() {
   const container = document.getElementById('orgChartInner');
-  const managers = [];
-  const others = [];
+  // Collect all employees
+  const employees = [];
   document.querySelectorAll('[id^="hrr_"]').forEach(tr => {
     const id = tr.id.replace('hrr_','');
     const pos = document.getElementById('hrpos_'+id)?.value || '';
     const type = document.getElementById('hrtype_'+id)?.value || '';
-    const qty = document.getElementById('hrqty_'+id)?.value || '1';
+    const qty = parseInt(document.getElementById('hrqty_'+id)?.value) || 1;
     const reports = document.getElementById('hrreports_'+id)?.value || '';
-    if(!pos || pos === '__other__') return;
-    const entry = {pos, type, qty: parseInt(qty)||1, reports};
-    if(type === 'إداري' || pos === 'مدير' || !reports) managers.push(entry);
-    else others.push(entry);
+    if (!pos || pos === '__other__') return;
+    employees.push({ pos, type, qty, reports });
   });
-  let html = '';
-  if(managers.length) {
-    html += '<div class="org-row">' + managers.map(m=>`<div class="org-node">👤 ${m.pos} (${m.qty})</div>`).join('') + '</div>';
+
+  if (!employees.length) {
+    container.innerHTML = '<p style="color:var(--text-muted);font-size:13px">أضف موظفين لعرض الهيكل التنظيمي.</p>';
+    return;
   }
-  if(others.length) {
-    html += '<div style="text-align:center;color:var(--border);font-size:18px">│</div>';
-    html += '<div class="org-row">' + others.map(o=>`<div class="org-node" style="background:var(--primary-light)">👤 ${o.pos} (${o.qty})</div>`).join('') + '</div>';
+
+  // Build tree: group by reports
+  const tree = {}; // key: reports_to ('' for root), value: [employees]
+  employees.forEach(e => {
+    const key = e.reports || '';
+    if (!tree[key]) tree[key] = [];
+    tree[key].push(e);
+  });
+
+  // Render node
+  function nodeHtml(e) {
+    const c = getTypeColor(e.type);
+    const label = e.qty > 1 ? `${e.pos} (${e.qty})` : e.pos;
+    const subLabel = e.type;
+    return `<div class="org-node-wrap">
+      <div class="org-node-box" style="background:${c.bg};color:${c.text}">
+        <div class="org-node-pos">👤 ${label}</div>
+        <div class="org-node-type">${subLabel}</div>
+      </div>
+      ${renderChildren(e.pos)}
+    </div>`;
   }
-  container.innerHTML = html || '<p style="color:var(--text-muted);font-size:13px">أضف موظفين لعرض الهيكل التنظيمي.</p>';
+
+  function renderChildren(parentPos) {
+    const children = tree[parentPos] || [];
+    if (!children.length) return '';
+    return `<div class="org-children">
+      <div class="org-vert-line"></div>
+      <div class="org-children-row">
+        ${children.map(c => nodeHtml(c)).join('')}
+      </div>
+    </div>`;
+  }
+
+  // Find roots (no reports or reports to non-existent employee)
+  const allPositions = employees.map(e => e.pos);
+  const roots = employees.filter(e => !e.reports || !allPositions.includes(e.reports));
+
+  const html = `<div class="org-tree">
+    ${roots.map(r => nodeHtml(r)).join('')}
+  </div>`;
+  container.innerHTML = html;
 }
 
 // ─── SUBMIT ───────────────────────────────────────────────
@@ -1256,7 +1337,7 @@ function collectFormData() {
     });
   });
 
-  // Ops data (component ratios per product per month)
+  // Ops data
   const opsData = {};
   Object.keys(products).filter(p=>products[p].name).forEach(pid => {
     const p = products[pid];
@@ -1276,23 +1357,22 @@ function collectFormData() {
   const depRows = [];
   document.querySelectorAll('[id^="fr_"]').forEach(tr => {
     const n = tr.id.replace('fr_','');
-    const cb = document.getElementById('fdep_'+n);
-    if (!cb?.checked) return;
+    if (!document.getElementById('fdep_'+n)?.checked) return;
     depRows.push({
-      cat:   document.getElementById('fcat_'+n)?.value || '',
-      bayan: document.getElementById('fbayan_'+n)?.value || '',
-      pct:   document.getElementById('dpct_'+n)?.value || '0',
-      qty:   document.getElementById('fqty_'+n)?.value || '0',
-      notes: document.getElementById('fnotes_'+n)?.value || '',
+      cat:    document.getElementById('fcat_'+n)?.value || '',
+      bayan:  document.getElementById('fbayan_'+n)?.value || '',
+      pct:    document.getElementById('dpct_'+n)?.value || '0',
+      qty:    document.getElementById('fqty_'+n)?.value || '0',
+      notes:  document.getElementById('fnotes_'+n)?.value || '',
       perUnit: document.getElementById('dpu_'+n)?.value || '$0',
-      total:   document.getElementById('dpt_'+n)?.value || '$0',
+      total:  document.getElementById('dpt_'+n)?.value || '$0',
     });
   });
 
   return {
-    projectIdea:   document.getElementById('projectIdea').value,
-    applicantName: document.getElementById('applicantName')?.value || '',
-    applicantPhone:document.getElementById('applicantPhone')?.value || '',
+    projectIdea:    document.getElementById('projectIdea').value,
+    applicantName:  document.getElementById('applicantName')?.value || '',
+    applicantPhone: document.getElementById('applicantPhone')?.value || '',
     foundingRows,
     products: prods,
     revenueData,
@@ -1317,8 +1397,8 @@ function collectFormData() {
 buildProgress();
 // Add initial rows
 addFoundingRow(); addFoundingRow(); addFoundingRow();
-addFixedRow(); addFixedRow();
 addHRRow();
+addFixedRow(); addFixedRow();
 </script>
 </body>
 </html>
