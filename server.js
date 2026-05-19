@@ -248,482 +248,534 @@ async function generateExcel(data) {
 }
 
 // ════════════════════════════════════════════════════════════
-//  WORD GENERATOR  (v4 — pixel-perfect match)
+//  WORD GENERATOR  (v5 — pixel-perfect + page breaks + org chart)
 // ════════════════════════════════════════════════════════════
 
-// ── Color palette (from XML analysis of الملف المطلوب) ────────
+// ── Color palette (exact from XML of الملف المطلوب) ──────────
 const C = {
-  DARK_BLUE:   '1F3864',  // section headers, total rows (dark blue)
-  GREY_HDR:    'AEAAAA',  // section headers for Revenue/Ops/Products
-  COL_HDR:     '262626',  // column header rows (near-black)
-  COL_HDR2:    'D9E2F3',  // column header rows (light blue) - founding/HR/fixed/dep
-  PROD1_DARK:  '8EA9DB',  // product 1 (odd) - name/unit cells dark
-  PROD1_LIGHT: '8EAADB',  // product 1 (odd) - unit cell slight variant  
-  PROD2_DARK:  'F4B084',  // product 2 (even) - name/unit cells
-  PROD2_LIGHT: 'F4B083',  // product 2 (even) - unit cell slight variant
-  MON_ODD:     'D9E1F2',  // month odd columns (light blue)
-  MON_EVEN:    'B4C6E7',  // month even columns (slightly darker)
-  MON_ODD2:    'FCE4D6',  // month odd for product 2
-  MON_EVEN2:   'F8CBAD',  // month even for product 2
-  SUBTOT:      '808080',  // subtotal rows (grey)
-  SUMMARY_LBL: 'DEEAF6',  // summary label cells (very light blue)
-  SUMMARY_VAL: 'FBE4D5',  // summary value cells (very light orange)
-  ROW_ODD:     'FBE4D5',  // data rows odd (founding/HR/fixed/dep)
-  ROW_EVEN:    'F2F2F2',  // data rows even
-  WHITE:        'FFFFFF',
+  DARK_BLUE:   '1F3864',
+  GREY_HDR:    'AEAAAA',
+  COL_HDR_BLK: '262626',   // near-black col headers
+  COL_HDR_BLU: 'D9E2F3',   // light-blue col headers
+  PROD1_DARK:  '8EA9DB',
+  PROD2_DARK:  'F4B084',
+  PROD3_DARK:  '8EAADB',
+  MON_ODD:     'D9E1F2',
+  MON_EVEN:    'B4C6E7',
+  MON_ODD2:    'FCE4D6',
+  MON_EVEN2:   'F8CBAD',
+  SUBTOT:      '808080',
+  SUM_LBL:     'DEEAF6',
+  SUM_VAL:     'FBE4D5',
+  ROW_ODD:     'FBE4D5',
+  ROW_EVEN:    'F2F2F2',
+  WHITE:       'FFFFFF',
+  ORG_ADM:     '4472C4',   // إداري — blue
+  ORG_EXE:     '70AD47',   // تنفيذي — green
+  ORG_SVC:     'ED7D31',   // مزود خدمة — orange
+  ORG_OTH:     '5B9BD5',   // other
 };
 
-// Page: landscape A4, margins 0.5"
-const PAGE = {
+// Page: A4 landscape, 0.5" margins
+const PAGE_LANDSCAPE = {
   size: { width: 11906, height: 16838, orientation: PageOrientation.LANDSCAPE },
   margin: { top: 720, right: 720, bottom: 720, left: 720 }
 };
-// Content width = 16838 - 720 - 720 = 15398 DXA (landscape uses long edge)
-const TW = 15398;
+const PAGE_PORTRAIT = {
+  size: { width: 11906, height: 16838 },
+  margin: { top: 720, right: 720, bottom: 720, left: 720 }
+};
 
-// ── Border helper ──────────────────────────────────────────────
-const THIN  = { style: BorderStyle.SINGLE, size: 1, color: '808080' };
-const NONE  = { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' };
-const borders = { top: THIN, bottom: THIN, left: THIN, right: THIN };
-const noBorders = { top: NONE, bottom: NONE, left: NONE, right: NONE };
+// Content width landscape (long edge - margins) = 16838 - 1440 = 15398
+const TW_L = 15398;
+// Content width portrait = 11906 - 1440 = 10466
+const TW_P = 10466;
 
-// ── Cell factory ──────────────────────────────────────────────
-function cell(text, opts = {}) {
+// Fonts
+const FONT = 'Sakkal Majalla';
+
+// Borders
+const BDR = (color='auto', sz=12) => ({ style: BorderStyle.SINGLE, size: sz, color });
+const BORDERS_AUTO = { top: BDR(), bottom: BDR(), left: BDR(), right: BDR() };
+const BORDERS_BLK  = { top: BDR('000000',8), bottom: BDR('000000',8), left: BDR('000000',8), right: BDR('000000',8) };
+
+// ── Cell factory ─────────────────────────────────────────────
+function C_(text, opts={}) {
   const {
-    fill, bold = false, size = 28, color, align = AlignmentType.CENTER,
-    w, vMergeRestart, vMerge, rowSpan, colSpan, vertical = VerticalAlign.CENTER
+    fill, bold=false, sz=28, color,
+    align=AlignmentType.CENTER,
+    w, colSpan, rowSpan,
+    vAlign=VerticalAlign.CENTER,
+    borders=BORDERS_AUTO
   } = opts;
 
   const shading = fill ? { type: ShadingType.CLEAR, fill, color: fill } : undefined;
+  const textColor = color || (
+    fill === C.DARK_BLUE || fill === C.COL_HDR_BLK || fill === C.SUBTOT || fill === C.GREY_HDR
+      ? C.WHITE : undefined
+  );
 
-  const tcPr = {};
-  if (w) tcPr.width = { size: w, type: WidthType.DXA };
-  if (colSpan) tcPr.columnSpan = colSpan;
-  if (vMergeRestart) tcPr.rowSpan = rowSpan;   // docx-js uses rowSpan
-  if (vMerge) tcPr.rowSpan = 0; // continuation
-  tcPr.verticalAlign = vertical;
+  const cellProps = { shading, borders, margins:{top:60,bottom:60,left:80,right:80}, verticalAlign: vAlign };
+  if (w) cellProps.width = { size: w, type: WidthType.DXA };
+  if (colSpan) cellProps.columnSpan = colSpan;
+  if (rowSpan > 1) cellProps.rowSpan = rowSpan;
 
   return new TableCell({
-    ...tcPr,
-    shading,
-    borders,
-    margins: { top: 60, bottom: 60, left: 80, right: 80 },
+    ...cellProps,
     children: [new Paragraph({
       bidirectional: true,
       alignment: align,
       spacing: { after: 0, line: 240, lineRule: 'auto' },
-      children: [new TextRun({
-        text: String(text ?? ''),
-        bold,
-        size,
-        font: 'Arial',
-        color: color || (fill === C.DARK_BLUE || fill === C.COL_HDR || fill === C.SUBTOT || fill === C.GREY_HDR ? C.WHITE : undefined),
-      })],
+      children: [new TextRun({ text: String(text??''), bold, size: sz, font: FONT, color: textColor })],
     })],
   });
 }
 
-// ── Table wrapper ──────────────────────────────────────────────
-function tbl(rows, colWidths) {
+// ── Table factory ─────────────────────────────────────────────
+function T_(rows, colWidths, tw) {
   return new Table({
-    width: { size: TW, type: WidthType.DXA },
+    width: { size: tw || TW_L, type: WidthType.DXA },
     columnWidths: colWidths,
     bidirectional: true,
     rows,
   });
 }
 
-// ── Spacing paragraph ──────────────────────────────────────────
-function spacer(before = 200) {
-  return new Paragraph({ spacing: { before, after: 0 }, children: [] });
+// ── Section header row (dark blue, full width) ───────────────
+function secHdr(title, cols, fill=C.DARK_BLUE) {
+  return new TableRow({ tableHeader: true, children: [
+    C_(title, { fill, bold:true, sz:32, colSpan:cols, w:TW_L, align:AlignmentType.CENTER,
+      color: C.WHITE })
+  ]});
 }
 
-function fmtN(v) {
-  const n = parseFloat(String(v || '0').replace(/[^0-9.-]/g, ''));
-  if (isNaN(n) || n === 0) return '0';
-  return n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+// ── Column header row ─────────────────────────────────────────
+function colHdr(labels, widths, fill=C.COL_HDR_BLK, textColor=C.WHITE) {
+  return new TableRow({ tableHeader: true, children:
+    labels.map((h,i) => C_(h, { fill, bold:true, sz:28, w:widths[i], color:textColor }))
+  });
 }
-function fmtM(v) {
-  const n = parseFloat(String(v || '0').replace(/[^0-9.-]/g, ''));
+
+// ── Total row (colspan + value) ───────────────────────────────
+function totRow(label, value, cols, lastW, fill=C.DARK_BLUE) {
+  return new TableRow({ children: [
+    C_(label, { fill, bold:true, sz:28, colSpan:cols-1, w:TW_L-lastW, align:AlignmentType.RIGHT }),
+    C_(value, { fill, bold:true, sz:28, w:lastW }),
+  ]});
+}
+
+// ── Spacer paragraph ──────────────────────────────────────────
+function SP() { return new Paragraph({ spacing:{before:0,after:0}, children:[] }); }
+
+// ── Page break paragraph ──────────────────────────────────────
+function PB() {
+  return new Paragraph({
+    children: [new TextRun({ break: 1 })],
+    spacing: { before:0, after:0 },
+  });
+}
+
+// ── Number formatters ─────────────────────────────────────────
+function fN(v) {
+  const n = parseFloat(String(v||'0').replace(/[^0-9.-]/g,''));
+  if (!n || isNaN(n)) return '0';
+  return n.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2});
+}
+function fM(v) {
+  const n = parseFloat(String(v||'0').replace(/[^0-9.-]/g,''));
   if (isNaN(n)) return '0 $';
-  return n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + ' $';
+  return n.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2})+' $';
 }
 
-// Product color palette cycling
-const PROD_COLORS = [
-  { dark: C.PROD1_DARK, mon_odd: C.MON_ODD, mon_even: C.MON_EVEN },
-  { dark: C.PROD2_DARK, mon_odd: C.MON_ODD2, mon_even: C.MON_EVEN2 },
+// Product color palette (cycles for 3+ products)
+const PROD_PAL = [
+  { dark: C.PROD1_DARK, mo: C.MON_ODD,  me: C.MON_EVEN  },
+  { dark: C.PROD2_DARK, mo: C.MON_ODD2, me: C.MON_EVEN2 },
+  { dark: C.PROD3_DARK, mo: C.MON_ODD,  me: C.MON_EVEN  },
 ];
-function prodColor(idx) { return PROD_COLORS[idx % 2]; }
+function PC(i) { return PROD_PAL[i % PROD_PAL.length]; }
 
+// ── Org chart color by type ───────────────────────────────────
+function orgColor(type) {
+  const m = {'إداري':C.ORG_ADM,'تنفيذي':C.ORG_EXE,'مزود خدمة':C.ORG_SVC};
+  return m[type] || C.ORG_OTH;
+}
+
+// ── Normalize column widths to sum exactly to TW ─────────────
+function norm(arr, tw) {
+  const sum = arr.reduce((a,b)=>a+b,0);
+  const r = arr.map(w=>Math.round(w*tw/sum));
+  r[r.length-1] = tw - r.slice(0,-1).reduce((a,b)=>a+b,0);
+  return r;
+}
 
 // ════════════════════════════════════════════════════════════════
 async function generateWord(data) {
-  const pids = Object.keys(data.products || {}).filter(p => data.products[p]?.name);
-  const ch = [];
+  const pids = Object.keys(data.products||{}).filter(p=>data.products[p]?.name);
 
-  // ── Title ──────────────────────────────────────────────────
-  ch.push(new Paragraph({
-    bidirectional: true, alignment: AlignmentType.CENTER,
-    spacing: { before: 0, after: 60 },
-    children: [new TextRun({ text: 'قسم المشاريع التنموية', bold: true, size: 34, font: 'Arial' })],
-  }));
-  ch.push(new Paragraph({
-    bidirectional: true, alignment: AlignmentType.CENTER,
-    spacing: { before: 0, after: 200 },
-    children: [new TextRun({ text: 'نموذج طرح دراسة مشروع', bold: true, size: 28, font: 'Arial' })],
-  }));
+  // Each table gets its own section (= its own page)
+  const sections = [];
 
-  // ════ 1. SUMMARY TABLE ═══════════════════════════════════════
-  // col widths: label 7740, value 7648 (from XML: tbl1 has 2 cols)
-  const SW = [7699, 7699];
-  ch.push(tbl([
-    // Section header spanning 2 cols
-    new TableRow({ children: [cell('ملخص معلومات المشروع', { fill: C.DARK_BLUE, bold: true, size: 28, colSpan: 2, w: TW, align: AlignmentType.CENTER })] }),
-    // Data rows
-    ...[
-      ['فكرة المشروع',                     data.projectIdea || ''],
-      ['اسم مقدم المشروع',                 data.applicantName || ''],
-      ['رقم الهاتف',                        data.applicantPhone || ''],
-      ['إجمالي التكاليف التأسيسية',         data.summary?.foundingTotal || '$0'],
-      ['إجمالي الإيرادات المتوقعة (سنوياً)',data.summary?.revenueAnnual || '$0'],
-      ['إجمالي التكاليف التشغيلية (سنوياً)',data.summary?.opsAnnual || '$0'],
-      ['إجمالي التكاليف الثابتة (سنوياً)', data.summary?.fixedAnnual || '$0'],
-      ['الاهتلاك (سنوياً)',                data.summary?.depreciation || '$0'],
-      ['الربح الصافي (سنوياً)',             data.summary?.netProfit || '$0'],
-      ['عدد الموظفين في المشروع',           String(data.summary?.employees || '0')],
-    ].map(([lbl, val]) => new TableRow({ children: [
-      cell(lbl, { fill: C.SUMMARY_LBL, bold: true, size: 28, w: SW[0], align: AlignmentType.RIGHT }),
-      cell(val, { fill: C.SUMMARY_VAL, bold: true, size: 28, w: SW[1], align: AlignmentType.CENTER }),
-    ]})),
-  ], SW));
-
-  // ════ 2. FOUNDING TABLE ══════════════════════════════════════
-  if (data.foundingRows?.length) {
-    ch.push(spacer());
-    // cols: #149 صنف269 بيان1368 اهتلاك380 عدد233 ملاحظات1521 تكلفة498 إجمالي582
-    const FW = [149, 269, 1368, 380, 233, 1521, 1572, 1906];
-    // normalize to TW
-    const fSum = FW.reduce((a,b)=>a+b,0);
-    const FWN = FW.map(w => Math.round(w * TW / fSum));
-    FWN[FWN.length-1] = TW - FWN.slice(0,-1).reduce((a,b)=>a+b,0);
-
-    const fRows = [
-      new TableRow({ children: [cell('التكاليف التأسيسية', { fill: C.DARK_BLUE, bold: true, size: 28, colSpan: 8, w: TW, align: AlignmentType.CENTER })] }),
-      new TableRow({ children: ['#','الصنف','البيان','الاهتلاك','العدد','ملاحظات','التكلفة للواحدة','التكلفة الإجمالية']
-        .map((h,i) => cell(h, { fill: C.COL_HDR2, bold: true, size: 28, w: FWN[i], color: '000000' })) }),
-      ...data.foundingRows.map((r, i) => new TableRow({ children: [
-        cell(i+1,         { fill: C.ROW_ODD, bold: false, size: 28, w: FWN[0] }),
-        cell(r.cat||'',   { fill: i%2===0?'':C.ROW_EVEN, size: 28, w: FWN[1], color: '000000' }),
-        cell(r.bayan||'', { fill: i%2===0?'':C.ROW_EVEN, size: 28, w: FWN[2], color: '000000' }),
-        cell(r.dep ? '✓' : '', { fill: i%2===0?'':C.ROW_EVEN, size: 28, w: FWN[3], color: '000000' }),
-        cell(r.qty||'',   { fill: i%2===0?'':C.ROW_EVEN, size: 28, w: FWN[4], color: '000000' }),
-        cell(r.notes||'', { fill: i%2===0?'':C.ROW_EVEN, size: 28, w: FWN[5], color: '000000' }),
-        cell(fmtM(r.price),{ fill: i%2===0?'':C.ROW_EVEN, size: 28, w: FWN[6], color: '000000' }),
-        cell(fmtM(r.total),{ fill: i%2===0?'':C.ROW_EVEN, size: 28, w: FWN[7], color: '000000' }),
-      ]})),
-      // Total row
-      new TableRow({ children: [
-        cell('الإجمالي', { fill: C.DARK_BLUE, bold: true, size: 28, colSpan: 7, w: FWN.slice(0,7).reduce((a,b)=>a+b,0), align: AlignmentType.RIGHT }),
-        cell(fmtM(data.summary?.foundingTotal), { fill: C.DARK_BLUE, bold: true, size: 28, w: FWN[7] }),
-      ]}),
-    ];
-    ch.push(tbl(fRows, FWN));
-  }
-
-  // ════ 3. PRODUCTS TABLE ══════════════════════════════════════
-  if (pids.length) {
-    ch.push(spacer());
-    // cols from XML: 4822, 4841, 5705 → normalize
-    const PW_raw = [4822, 4841, 5705];
-    const pSum = PW_raw.reduce((a,b)=>a+b,0);
-    const PW = PW_raw.map(w => Math.round(w * TW / pSum));
-    PW[2] = TW - PW[0] - PW[1];
-
-    const prodRows = [
-      new TableRow({ children: [cell('جدول المنتجات', { fill: C.GREY_HDR, bold: true, size: 28, colSpan: 3, w: TW, align: AlignmentType.CENTER })] }),
-      new TableRow({ children: [
-        cell('البيان',    { fill: C.COL_HDR, bold: true, size: 28, w: PW[0] }),
-        cell('الواحدة',  { fill: C.COL_HDR, bold: true, size: 28, w: PW[1] }),
-        cell('المكونات', { fill: C.COL_HDR, bold: true, size: 28, w: PW[2] }),
-      ]}),
-    ];
-
-    pids.forEach((pid, pidIdx) => {
-      const p = data.products[pid];
-      const comps = (p.components || []).filter(c => c);
-      const pc = prodColor(pidIdx);
-      comps.forEach((comp, ci) => {
-        if (ci === 0) {
-          prodRows.push(new TableRow({ children: [
-            new TableCell({
-              rowSpan: comps.length,
-              shading: { type: ShadingType.CLEAR, fill: pc.dark, color: pc.dark },
-              borders, margins: { top:60,bottom:60,left:80,right:80 },
-              width: { size: PW[0], type: WidthType.DXA },
-              verticalAlign: VerticalAlign.CENTER,
-              children: [new Paragraph({ bidirectional:true, alignment:AlignmentType.CENTER, spacing:{after:0}, children:[new TextRun({text:p.name||'',bold:true,size:28,font:'Arial',color:C.WHITE})] })],
-            }),
-            new TableCell({
-              rowSpan: comps.length,
-              shading: { type: ShadingType.CLEAR, fill: pc.dark, color: pc.dark },
-              borders, margins: { top:60,bottom:60,left:80,right:80 },
-              width: { size: PW[1], type: WidthType.DXA },
-              verticalAlign: VerticalAlign.CENTER,
-              children: [new Paragraph({ bidirectional:true, alignment:AlignmentType.CENTER, spacing:{after:0}, children:[new TextRun({text:p.unit||'',bold:false,size:28,font:'Arial',color:C.WHITE})] })],
-            }),
-            cell(comp, { fill: pc.dark, size: 28, w: PW[2] }),
-          ]}));
-        } else {
-          prodRows.push(new TableRow({ children: [
-            cell(comp, { fill: pc.dark, size: 28, w: PW[2] }),
-          ]}));
-        }
-      });
-    });
-    ch.push(tbl(prodRows, PW));
-  }
-
-  // ════ 4. REVENUE TABLE ═══════════════════════════════════════
-  if (pids.length) {
-    ch.push(spacer());
-    // cols: بيان756 واحدة383 + 12 months ~309 each
-    const RW_raw = [756, 383, 309,309,309,309,309,309,309,309,309,359,359,362];
-    const rSum = RW_raw.reduce((a,b)=>a+b,0);
-    const RW = RW_raw.map(w => Math.round(w * TW / rSum));
-    RW[RW.length-1] = TW - RW.slice(0,-1).reduce((a,b)=>a+b,0);
-
-    const revRows = [
-      new TableRow({ children: [cell('الإيرادات المتوقعة', { fill: C.GREY_HDR, bold:true, size:28, colSpan: 14, w: TW, align: AlignmentType.CENTER })] }),
-      new TableRow({ children: [
-        cell('البيان',   { fill: C.COL_HDR, bold:true, size:28, w: RW[0] }),
-        cell('الواحدة', { fill: C.COL_HDR, bold:true, size:28, w: RW[1] }),
-        ...MONTHS.map((m,i) => cell(m, { fill: C.COL_HDR, bold:true, size:28, w: RW[i+2] })),
-      ]}),
-    ];
-
-    pids.forEach((pid, pidIdx) => {
-      const p = data.products[pid];
-      const rev = data.revenueData?.[pid] || [];
-      const pc = prodColor(pidIdx);
-      // row 1: qty
-      revRows.push(new TableRow({ children: [
-        cell(p.name,  { fill: pc.dark,  bold:true, size:28, w: RW[0] }),
-        cell(p.unit||'', { fill: pc.dark, size:28, w: RW[1] }),
-        ...MONTHS.map((_,m) => cell(fmtN(rev[m]?.qty), { fill: m%2===0?pc.mon_odd:pc.mon_even, size:28, w:RW[m+2], color:'000000' })),
-      ]}));
-      // row 2: unit price
-      revRows.push(new TableRow({ children: [
-        cell('سعر مبيع الواحدة', { fill: pc.dark, size:28, w: RW[0] }),
-        cell('$',               { fill: pc.dark, size:28, w: RW[1] }),
-        ...MONTHS.map((_,m) => cell(fmtN(rev[m]?.unitPrice), { fill: m%2===0?pc.mon_odd:pc.mon_even, size:28, w:RW[m+2], color:'000000' })),
-      ]}));
-      // row 3: total
-      revRows.push(new TableRow({ children: [
-        cell('سعر المبيع الإجمالي', { fill: pc.dark, size:28, w: RW[0] }),
-        cell('$',                   { fill: pc.dark, size:28, w: RW[1] }),
-        ...MONTHS.map((_,m) => cell(fmtN(rev[m]?.total||0), { fill: m%2===0?pc.mon_odd:pc.mon_even, size:28, w:RW[m+2], color:'000000' })),
-      ]}));
-    });
-    // grand total row
-    const monthTotals = MONTHS.map((_,m) => {
-      let t = 0;
-      pids.forEach(pid => { t += parseFloat(String(data.revenueData?.[pid]?.[m]?.total||'0').replace(/[^0-9.-]/g,''))||0; });
-      return fmtM(t);
-    });
-    revRows.push(new TableRow({ children: [
-      cell('الإجمالي', { fill: C.COL_HDR, bold:true, size:28, w: RW[0] }),
-      cell('',          { fill: C.COL_HDR, bold:true, size:28, w: RW[1] }),
-      ...MONTHS.map((_,m) => cell(monthTotals[m], { fill: C.COL_HDR, bold:true, size:28, w:RW[m+2] })),
-    ]}));
-    ch.push(tbl(revRows, RW));
-  }
-
-  // ════ 5. OPS TABLE ═══════════════════════════════════════════
-  if (pids.length && data.opsData) {
-    ch.push(spacer());
-    // cols: بيان433 واحدة285 مكوّن395 + 12 months
-    const OW_raw = [433, 285, 395, 319,324,324,324,324,342,342,342,342,357,357,350];
-    const oSum = OW_raw.reduce((a,b)=>a+b,0);
-    const OW = OW_raw.map(w => Math.round(w * TW / oSum));
-    OW[OW.length-1] = TW - OW.slice(0,-1).reduce((a,b)=>a+b,0);
-
-    const opsRows = [
-      new TableRow({ children: [cell('التكاليف التشغيلية', { fill: C.GREY_HDR, bold:true, size:28, colSpan:15, w:TW, align:AlignmentType.CENTER })] }),
-      new TableRow({ children: [
-        cell('البيان',    { fill: C.COL_HDR, bold:true, size:28, w: OW[0] }),
-        cell('الواحدة',  { fill: C.COL_HDR, bold:true, size:28, w: OW[1] }),
-        cell('التفاصيل', { fill: C.COL_HDR, bold:true, size:28, w: OW[2] }),
-        ...MONTHS.map((m,i) => cell(m, { fill: C.COL_HDR, bold:true, size:28, w: OW[i+3] })),
-      ]}),
-    ];
-
-    pids.forEach((pid, pidIdx) => {
-      const p = data.products[pid];
-      const comps = (p.components || []).filter(c => c);
-      const opsD = data.opsData?.[pid] || {};
-      const pc = prodColor(pidIdx);
-
-      comps.forEach((comp, ci) => {
-        const vals = MONTHS.map((_,m) => fmtN(opsD[`${ci}_${m}`]));
-        if (ci === 0) {
-          opsRows.push(new TableRow({ children: [
-            new TableCell({
-              rowSpan: comps.length,
-              shading: { type: ShadingType.CLEAR, fill: pc.dark, color: pc.dark },
-              borders, margins:{top:60,bottom:60,left:80,right:80},
-              width:{size:OW[0],type:WidthType.DXA},
-              verticalAlign: VerticalAlign.CENTER,
-              children:[new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{after:0},children:[new TextRun({text:p.name||'',bold:true,size:28,font:'Arial',color:C.WHITE})]})],
-            }),
-            new TableCell({
-              rowSpan: comps.length,
-              shading: { type: ShadingType.CLEAR, fill: pc.dark, color: pc.dark },
-              borders, margins:{top:60,bottom:60,left:80,right:80},
-              width:{size:OW[1],type:WidthType.DXA},
-              verticalAlign: VerticalAlign.CENTER,
-              children:[new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{after:0},children:[new TextRun({text:p.unit||'',size:28,font:'Arial',color:C.WHITE})]})],
-            }),
-            cell(comp, { fill: pc.dark, size:28, w: OW[2] }),
-            ...vals.map((v,m) => cell(v, { fill: m%2===0?pc.mon_odd:pc.mon_even, size:28, w:OW[m+3], color:'000000' })),
-          ]}));
-        } else {
-          opsRows.push(new TableRow({ children: [
-            cell(comp, { fill: pc.dark, size:28, w: OW[2] }),
-            ...vals.map((v,m) => cell(v, { fill: m%2===0?pc.mon_odd:pc.mon_even, size:28, w:OW[m+3], color:'000000' })),
-          ]}));
-        }
-      });
-      // subtotal row
-      const subVals = MONTHS.map((_,m) => fmtM(opsD[`sub_${m}`]||0));
-      opsRows.push(new TableRow({ children: [
-        cell(`إجمالي ${p.name}`, { fill: C.SUBTOT, bold:true, size:28, colSpan:3, w:OW.slice(0,3).reduce((a,b)=>a+b,0), align:AlignmentType.RIGHT }),
-        ...subVals.map((v,m) => cell(v, { fill: C.SUBTOT, bold:true, size:28, w:OW[m+3] })),
-      ]}));
-    });
-    // grand total
-    const opsTotals = MONTHS.map((_,m) => {
-      let t=0;
-      pids.forEach(pid => { t += parseFloat(String(data.opsData?.[pid]?.[`sub_${m}`]||'0').replace(/[^0-9.-]/g,''))||0; });
-      return fmtM(t);
-    });
-    opsRows.push(new TableRow({ children: [
-      cell('الإجمالي', { fill: C.COL_HDR, bold:true, size:28, colSpan:3, w:OW.slice(0,3).reduce((a,b)=>a+b,0), align:AlignmentType.RIGHT }),
-      ...opsTotals.map((v,m) => cell(v, { fill: C.COL_HDR, bold:true, size:28, w:OW[m+3] })),
-    ]}));
-    ch.push(tbl(opsRows, OW));
-  }
-
-  // ════ 6. HR TABLE ════════════════════════════════════════════
-  if (data.hrRows?.length) {
-    ch.push(spacer());
-    const HW_raw = [149, 907, 876, 321, 1288, 2325, 2731];
-    const hSum = HW_raw.reduce((a,b)=>a+b,0);
-    const HW = HW_raw.map(w => Math.round(w * TW / hSum));
-    HW[HW.length-1] = TW - HW.slice(0,-1).reduce((a,b)=>a+b,0);
-
-    let hrTotal = 0;
-    data.hrRows.forEach(r => { hrTotal += parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0; });
-
-    const hrRows = [
-      new TableRow({ children: [cell('الموارد البشرية', { fill: C.DARK_BLUE, bold:true, size:28, colSpan:7, w:TW, align:AlignmentType.CENTER })] }),
-      new TableRow({ children: ['#','المنصب','النوع','العدد','تابع لـ','الراتب الشهري الفردي','الراتب الشهري الإجمالي']
-        .map((h,i) => cell(h, { fill: C.COL_HDR2, bold:true, size:28, w:HW[i], color:'000000' })) }),
-      ...data.hrRows.map((r,i) => new TableRow({ children: [
-        cell(i+1,             { fill: C.ROW_ODD,              size:28, w:HW[0], color:'000000' }),
-        cell(r.position||'',  { fill: i%2===0?'':C.ROW_EVEN,  size:28, w:HW[1], color:'000000' }),
-        cell(r.type||'',      { fill: i%2===0?'':C.ROW_EVEN,  size:28, w:HW[2], color:'000000' }),
-        cell(r.qty||'',       { fill: i%2===0?'':C.ROW_EVEN,  size:28, w:HW[3], color:'000000' }),
-        cell(r.reports||'—',  { fill: i%2===0?'':C.ROW_EVEN,  size:28, w:HW[4], color:'000000' }),
-        cell(fmtM(r.salary),  { fill: i%2===0?'':C.ROW_EVEN,  size:28, w:HW[5], color:'000000' }),
-        cell(fmtM(r.total),   { fill: i%2===0?'':C.ROW_EVEN,  size:28, w:HW[6], color:'000000' }),
-      ]})),
-      new TableRow({ children: [
-        cell('الإجمالي', { fill: C.DARK_BLUE, bold:true, size:28, colSpan:6, w:HW.slice(0,6).reduce((a,b)=>a+b,0), align:AlignmentType.RIGHT }),
-        cell(fmtM(hrTotal), { fill: C.DARK_BLUE, bold:true, size:28, w:HW[6] }),
-      ]}),
-    ];
-    ch.push(tbl(hrRows, HW));
-  }
-
-  // ════ 7. FIXED COSTS TABLE ═══════════════════════════════════
-  if (data.fixedRows?.length) {
-    ch.push(spacer());
-    const FXW_raw = [149, 500, 1000, 300, 1400, 1400, 1400];
-    const fxSum = FXW_raw.reduce((a,b)=>a+b,0);
-    const FXW = FXW_raw.map(w => Math.round(w * TW / fxSum));
-    FXW[FXW.length-1] = TW - FXW.slice(0,-1).reduce((a,b)=>a+b,0);
-
-    let fxTotal = 0;
-    data.fixedRows.forEach(r => { fxTotal += parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0; });
-
-    const fxRows = [
-      new TableRow({ children: [cell('التكاليف الثابتة', { fill: C.DARK_BLUE, bold:true, size:28, colSpan:7, w:TW, align:AlignmentType.CENTER })] }),
-      new TableRow({ children: ['#','الصنف','البيان','العدد','ملاحظات','التكلفة الشهرية للواحدة','التكلفة الشهرية الإجمالية']
-        .map((h,i) => cell(h, { fill: C.COL_HDR2, bold:true, size:28, w:FXW[i], color:'000000' })) }),
-      ...data.fixedRows.map((r,i) => new TableRow({ children: [
-        cell(i+1,           { fill: C.ROW_ODD,             size:28, w:FXW[0], color:'000000' }),
-        cell(r.cat||'',     { fill: i%2===0?'':C.ROW_EVEN, size:28, w:FXW[1], color:'000000' }),
-        cell(r.bayan||'',   { fill: i%2===0?'':C.ROW_EVEN, size:28, w:FXW[2], color:'000000' }),
-        cell(r.qty||'',     { fill: i%2===0?'':C.ROW_EVEN, size:28, w:FXW[3], color:'000000' }),
-        cell(r.notes||'',   { fill: i%2===0?'':C.ROW_EVEN, size:28, w:FXW[4], color:'000000' }),
-        cell(fmtM(r.price), { fill: i%2===0?'':C.ROW_EVEN, size:28, w:FXW[5], color:'000000' }),
-        cell(fmtM(r.total), { fill: i%2===0?'':C.ROW_EVEN, size:28, w:FXW[6], color:'000000' }),
-      ]})),
-      new TableRow({ children: [
-        cell('الإجمالي', { fill: C.DARK_BLUE, bold:true, size:28, colSpan:6, w:FXW.slice(0,6).reduce((a,b)=>a+b,0), align:AlignmentType.RIGHT }),
-        cell(fmtM(fxTotal), { fill: C.DARK_BLUE, bold:true, size:28, w:FXW[6] }),
-      ]}),
-    ];
-    ch.push(tbl(fxRows, FXW));
-  }
-
-  // ════ 8. DEPRECIATION TABLE ══════════════════════════════════
-  if (data.depRows?.length) {
-    ch.push(spacer());
-    const DW_raw = [149, 280, 1350, 450, 225, 1500, 1500, 1500];
-    const dSum = DW_raw.reduce((a,b)=>a+b,0);
-    const DW = DW_raw.map(w => Math.round(w * TW / dSum));
-    DW[DW.length-1] = TW - DW.slice(0,-1).reduce((a,b)=>a+b,0);
-
-    let depTotal = 0;
-    data.depRows.forEach(r => { depTotal += parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0; });
-
-    const dRows = [
-      new TableRow({ children: [cell('الاهتلاك', { fill: C.DARK_BLUE, bold:true, size:28, colSpan:8, w:TW, align:AlignmentType.CENTER })] }),
-      new TableRow({ children: ['#','الصنف','البيان','نسبة الاهتلاك','العدد','ملاحظات','قيمة الاهتلاك للواحدة','قيمة الاهتلاك الإجمالية']
-        .map((h,i) => cell(h, { fill: C.COL_HDR2, bold:true, size:28, w:DW[i], color:'000000' })) }),
-      ...data.depRows.map((r,i) => new TableRow({ children: [
-        cell(i+1,                    { fill: C.ROW_ODD,             size:28, w:DW[0], color:'000000' }),
-        cell(r.cat||'',              { fill: i%2===0?'':C.ROW_EVEN, size:28, w:DW[1], color:'000000' }),
-        cell(r.bayan||'',            { fill: i%2===0?'':C.ROW_EVEN, size:28, w:DW[2], color:'000000' }),
-        cell((r.pct||'0') + ' %',   { fill: i%2===0?'':C.ROW_EVEN, size:28, w:DW[3], color:'000000' }),
-        cell(r.qty||'',              { fill: i%2===0?'':C.ROW_EVEN, size:28, w:DW[4], color:'000000' }),
-        cell(r.notes||'',            { fill: i%2===0?'':C.ROW_EVEN, size:28, w:DW[5], color:'000000' }),
-        cell(fmtM(r.perUnit),        { fill: i%2===0?'':C.ROW_EVEN, size:28, w:DW[6], color:'000000' }),
-        cell(fmtM(r.total),          { fill: i%2===0?'':C.ROW_EVEN, size:28, w:DW[7], color:'000000' }),
-      ]})),
-      new TableRow({ children: [
-        cell('إجمالي قيمة الاهتلاك', { fill: C.DARK_BLUE, bold:true, size:28, colSpan:7, w:DW.slice(0,7).reduce((a,b)=>a+b,0), align:AlignmentType.RIGHT }),
-        cell(fmtM(depTotal), { fill: C.DARK_BLUE, bold:true, size:28, w:DW[7] }),
-      ]}),
-    ];
-    ch.push(tbl(dRows, DW));
-  }
-
-  // Footer
-  ch.push(spacer(200));
-  ch.push(new Paragraph({
-    bidirectional: true,
-    spacing: { after: 0 },
-    children: [new TextRun({ text: `تاريخ الإرسال: ${new Date(data.submittedAt||Date.now()).toLocaleString('ar-SA')}`, size: 20, font: 'Arial', color: '888888' })],
-  }));
-
-  const doc = new Document({
-    sections: [{ properties: { page: PAGE }, children: ch }],
+  // ── Title section ──────────────────────────────────────────
+  sections.push({
+    properties: { page: PAGE_LANDSCAPE },
+    children: [
+      new Paragraph({ bidirectional:true, alignment:AlignmentType.CENTER, spacing:{before:3000,after:120},
+        children:[new TextRun({text:'قسم المشاريع التنموية',bold:true,size:40,font:FONT,color:C.DARK_BLUE})] }),
+      new Paragraph({ bidirectional:true, alignment:AlignmentType.CENTER, spacing:{before:0,after:0},
+        children:[new TextRun({text:'نموذج طرح دراسة مشروع',bold:true,size:32,font:FONT})] }),
+    ],
   });
+
+  // ── Helper: wrap table in a section ─────────────────────────
+  function tableSection(tblObj, landscape=true) {
+    return {
+      properties: { page: landscape ? PAGE_LANDSCAPE : PAGE_PORTRAIT },
+      children: [SP(), tblObj, SP()],
+    };
+  }
+
+  // ════ 1. SUMMARY ══════════════════════════════════════════
+  {
+    const W = norm([7699,7699], TW_L);
+    const rows = [
+      new TableRow({ children: [C_('ملخص معلومات المشروع', { fill:C.DARK_BLUE, bold:true, sz:32, colSpan:2, w:TW_L, align:AlignmentType.CENTER, color:C.WHITE })] }),
+      ...[
+        ['فكرة المشروع',                      data.projectIdea||''],
+        ['اسم مقدم المشروع',                  data.applicantName||''],
+        ['رقم الهاتف',                         data.applicantPhone||''],
+        ['إجمالي التكاليف التأسيسية',          data.summary?.foundingTotal||'$0'],
+        ['إجمالي الإيرادات المتوقعة (سنوياً)', data.summary?.revenueAnnual||'$0'],
+        ['إجمالي التكاليف التشغيلية (سنوياً)', data.summary?.opsAnnual||'$0'],
+        ['إجمالي التكاليف الثابتة (سنوياً)',   data.summary?.fixedAnnual||'$0'],
+        ['الاهتلاك (سنوياً)',                  data.summary?.depreciation||'$0'],
+        ['الربح الصافي (سنوياً)',               data.summary?.netProfit||'$0'],
+        ['عدد الموظفين في المشروع',             String(data.summary?.employees||'0')],
+      ].map(([lbl,val]) => new TableRow({ children:[
+        C_(lbl, { fill:C.SUM_LBL, bold:true, sz:28, w:W[0], align:AlignmentType.RIGHT }),
+        C_(val, { fill:C.SUM_VAL, bold:true, sz:28, w:W[1] }),
+      ]})),
+    ];
+    sections.push(tableSection(T_(rows, W)));
+  }
+
+  // ════ 2. FOUNDING ═════════════════════════════════════════
+  if (data.foundingRows?.length) {
+    const W = norm([149,269,1368,380,233,1521,1572,1906], TW_L);
+    const hdrs = ['#','الصنف','البيان','الاهتلاك','العدد','ملاحظات','التكلفة للواحدة','التكلفة الإجمالية'];
+    let tot = 0;
+    data.foundingRows.forEach(r=>{ tot+=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0; });
+    const rows = [
+      secHdr('التكاليف التأسيسية', 8),
+      colHdr(hdrs, W, C.COL_HDR_BLU, '000000'),
+      ...data.foundingRows.map((r,i)=>new TableRow({children:[
+        C_(i+1,          {fill:C.ROW_ODD,                   sz:28,w:W[0]}),
+        C_(r.cat||'',    {fill:i%2===0?C.WHITE:C.ROW_EVEN,  sz:28,w:W[1],color:'000000'}),
+        C_(r.bayan||'',  {fill:i%2===0?C.WHITE:C.ROW_EVEN,  sz:28,w:W[2],color:'000000'}),
+        C_(r.dep?'✓':'', {fill:i%2===0?C.WHITE:C.ROW_EVEN,  sz:28,w:W[3],color:r.dep?'70AD47':'000000'}),
+        C_(r.qty||'',    {fill:i%2===0?C.WHITE:C.ROW_EVEN,  sz:28,w:W[4],color:'000000'}),
+        C_(r.notes||'',  {fill:i%2===0?C.WHITE:C.ROW_EVEN,  sz:28,w:W[5],color:'000000'}),
+        C_(fM(r.price),  {fill:i%2===0?C.WHITE:C.ROW_EVEN,  sz:28,w:W[6],color:'000000'}),
+        C_(fM(r.total),  {fill:i%2===0?C.WHITE:C.ROW_EVEN,  sz:28,w:W[7],color:'000000'}),
+      ]})),
+      totRow('الإجمالي', fM(tot), 8, W[7]),
+    ];
+    sections.push(tableSection(T_(rows, W)));
+  }
+
+  // ════ 3. PRODUCTS ═════════════════════════════════════════
+  if (pids.length) {
+    const W = norm([4822,4841,5705], TW_L);
+    const prodRows = [
+      secHdr('جدول المنتجات', 3, C.GREY_HDR),
+      colHdr(['البيان','الواحدة','المكونات'], W, C.COL_HDR_BLK),
+    ];
+    pids.forEach((pid,pi) => {
+      const p = data.products[pid];
+      const comps = (p.components||[]).filter(c=>c);
+      const pc = PC(pi);
+      comps.forEach((comp,ci) => {
+        if (ci===0) {
+          prodRows.push(new TableRow({ children:[
+            new TableCell({ rowSpan:comps.length, shading:{type:ShadingType.CLEAR,fill:pc.dark,color:pc.dark},
+              borders:BORDERS_AUTO, margins:{top:60,bottom:60,left:80,right:80},
+              width:{size:W[0],type:WidthType.DXA}, verticalAlign:VerticalAlign.CENTER,
+              children:[new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{after:0},
+                children:[new TextRun({text:p.name||'',bold:true,size:28,font:FONT,color:C.WHITE})]})] }),
+            new TableCell({ rowSpan:comps.length, shading:{type:ShadingType.CLEAR,fill:pc.dark,color:pc.dark},
+              borders:BORDERS_AUTO, margins:{top:60,bottom:60,left:80,right:80},
+              width:{size:W[1],type:WidthType.DXA}, verticalAlign:VerticalAlign.CENTER,
+              children:[new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{after:0},
+                children:[new TextRun({text:p.unit||'',size:28,font:FONT,color:C.WHITE})]})] }),
+            C_(comp, {fill:pc.dark, sz:28, w:W[2]}),
+          ]}));
+        } else {
+          prodRows.push(new TableRow({children:[C_(comp,{fill:pc.dark,sz:28,w:W[2]})]}));
+        }
+      });
+    });
+    sections.push(tableSection(T_(prodRows, W)));
+  }
+
+  // ════ 4. REVENUE ══════════════════════════════════════════
+  if (pids.length) {
+    const W = norm([756,383,309,309,309,309,309,309,309,309,309,359,359,362], TW_L);
+    const revRows = [
+      secHdr('الإيرادات المتوقعة', 14, C.GREY_HDR),
+      colHdr(['البيان','الواحدة',...MONTHS], W, C.COL_HDR_BLK),
+    ];
+    pids.forEach((pid,pi) => {
+      const p   = data.products[pid];
+      const rev = data.revenueData?.[pid]||[];
+      const pc  = PC(pi);
+      revRows.push(new TableRow({children:[
+        C_(p.name,   {fill:pc.dark,bold:true,sz:28,w:W[0]}),
+        C_(p.unit||'',{fill:pc.dark,sz:28,w:W[1]}),
+        ...MONTHS.map((_,m)=>C_(fN(rev[m]?.qty),{fill:m%2===0?pc.mo:pc.me,sz:28,w:W[m+2],color:'000000'})),
+      ]}));
+      revRows.push(new TableRow({children:[
+        C_('سعر مبيع الواحدة',{fill:pc.dark,sz:28,w:W[0]}),
+        C_('$',{fill:pc.dark,sz:28,w:W[1]}),
+        ...MONTHS.map((_,m)=>C_(fN(rev[m]?.unitPrice),{fill:m%2===0?pc.mo:pc.me,sz:28,w:W[m+2],color:'000000'})),
+      ]}));
+      revRows.push(new TableRow({children:[
+        C_('سعر المبيع الإجمالي',{fill:pc.dark,sz:28,w:W[0]}),
+        C_('$',{fill:pc.dark,sz:28,w:W[1]}),
+        ...MONTHS.map((_,m)=>C_(fN(rev[m]?.total||0),{fill:m%2===0?pc.mo:pc.me,sz:28,w:W[m+2],color:'000000'})),
+      ]}));
+    });
+    const mTots = MONTHS.map((_,m)=>{let t=0;pids.forEach(pid=>{t+=parseFloat(String(data.revenueData?.[pid]?.[m]?.total||'0').replace(/[^0-9.-]/g,''))||0;});return fM(t);});
+    revRows.push(new TableRow({children:[
+      C_('الإجمالي',{fill:C.COL_HDR_BLK,bold:true,sz:28,w:W[0]}),
+      C_('',{fill:C.COL_HDR_BLK,sz:28,w:W[1]}),
+      ...mTots.map((v,m)=>C_(v,{fill:C.COL_HDR_BLK,bold:true,sz:28,w:W[m+2]})),
+    ]}));
+    sections.push(tableSection(T_(revRows, W)));
+  }
+
+  // ════ 5. OPS ══════════════════════════════════════════════
+  if (pids.length && data.opsData) {
+    const W = norm([433,285,395,319,324,324,324,324,342,342,342,342,357,357,350], TW_L);
+    const opsRows = [
+      secHdr('التكاليف التشغيلية', 15, C.GREY_HDR),
+      colHdr(['البيان','الواحدة','التفاصيل',...MONTHS], W, C.COL_HDR_BLK),
+    ];
+    pids.forEach((pid,pi) => {
+      const p = data.products[pid];
+      const comps = (p.components||[]).filter(c=>c);
+      const opsD = data.opsData?.[pid]||{};
+      const pc = PC(pi);
+      comps.forEach((comp,ci) => {
+        const vals = MONTHS.map((_,m)=>fN(opsD[`${ci}_${m}`]));
+        if (ci===0) {
+          opsRows.push(new TableRow({children:[
+            new TableCell({ rowSpan:comps.length, shading:{type:ShadingType.CLEAR,fill:pc.dark,color:pc.dark},
+              borders:BORDERS_AUTO, margins:{top:60,bottom:60,left:80,right:80},
+              width:{size:W[0],type:WidthType.DXA}, verticalAlign:VerticalAlign.CENTER,
+              children:[new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{after:0},
+                children:[new TextRun({text:p.name||'',bold:true,size:28,font:FONT,color:C.WHITE})]})] }),
+            new TableCell({ rowSpan:comps.length, shading:{type:ShadingType.CLEAR,fill:pc.dark,color:pc.dark},
+              borders:BORDERS_AUTO, margins:{top:60,bottom:60,left:80,right:80},
+              width:{size:W[1],type:WidthType.DXA}, verticalAlign:VerticalAlign.CENTER,
+              children:[new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{after:0},
+                children:[new TextRun({text:p.unit||'',size:28,font:FONT,color:C.WHITE})]})] }),
+            C_(comp,{fill:pc.dark,sz:28,w:W[2]}),
+            ...vals.map((v,m)=>C_(v,{fill:m%2===0?pc.mo:pc.me,sz:28,w:W[m+3],color:'000000'})),
+          ]}));
+        } else {
+          opsRows.push(new TableRow({children:[
+            C_(comp,{fill:pc.dark,sz:28,w:W[2]}),
+            ...vals.map((v,m)=>C_(v,{fill:m%2===0?pc.mo:pc.me,sz:28,w:W[m+3],color:'000000'})),
+          ]}));
+        }
+      });
+      const subVals = MONTHS.map((_,m)=>fM(opsD[`sub_${m}`]||0));
+      opsRows.push(new TableRow({children:[
+        C_(`إجمالي ${p.name}`,{fill:C.SUBTOT,bold:true,sz:28,colSpan:3,w:W.slice(0,3).reduce((a,b)=>a+b,0),align:AlignmentType.RIGHT}),
+        ...subVals.map((v,m)=>C_(v,{fill:C.SUBTOT,bold:true,sz:28,w:W[m+3]})),
+      ]}));
+    });
+    const opsTots = MONTHS.map((_,m)=>{let t=0;pids.forEach(pid=>{t+=parseFloat(String(data.opsData?.[pid]?.[`sub_${m}`]||'0').replace(/[^0-9.-]/g,''))||0;});return fM(t);});
+    opsRows.push(new TableRow({children:[
+      C_('الإجمالي',{fill:C.COL_HDR_BLK,bold:true,sz:28,colSpan:3,w:W.slice(0,3).reduce((a,b)=>a+b,0),align:AlignmentType.RIGHT}),
+      ...opsTots.map((v,m)=>C_(v,{fill:C.COL_HDR_BLK,bold:true,sz:28,w:W[m+3]})),
+    ]}));
+    sections.push(tableSection(T_(opsRows, W)));
+  }
+
+  // ════ 6. HR ═══════════════════════════════════════════════
+  if (data.hrRows?.length) {
+    const W = norm([149,907,876,321,1288,2325,2731], TW_L);
+    const hdrs = ['#','المنصب','النوع','العدد','تابع لـ','الراتب الشهري الفردي','الراتب الشهري الإجمالي'];
+    let tot=0; data.hrRows.forEach(r=>{tot+=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0;});
+    const rows = [
+      secHdr('الموارد البشرية', 7),
+      colHdr(hdrs, W, C.COL_HDR_BLU, '000000'),
+      ...data.hrRows.map((r,i)=>new TableRow({children:[
+        C_(i+1,             {fill:C.ROW_ODD,                  sz:28,w:W[0]}),
+        C_(r.position||'',  {fill:i%2===0?C.WHITE:C.ROW_EVEN, sz:28,w:W[1],color:'000000'}),
+        C_(r.type||'',      {fill:i%2===0?C.WHITE:C.ROW_EVEN, sz:28,w:W[2],color:'000000'}),
+        C_(r.qty||'',       {fill:i%2===0?C.WHITE:C.ROW_EVEN, sz:28,w:W[3],color:'000000'}),
+        C_(r.reports||'—',  {fill:i%2===0?C.WHITE:C.ROW_EVEN, sz:28,w:W[4],color:'000000'}),
+        C_(fM(r.salary),    {fill:i%2===0?C.WHITE:C.ROW_EVEN, sz:28,w:W[5],color:'000000'}),
+        C_(fM(r.total),     {fill:i%2===0?C.WHITE:C.ROW_EVEN, sz:28,w:W[6],color:'000000'}),
+      ]})),
+      totRow('الإجمالي', fM(tot), 7, W[6]),
+    ];
+    sections.push(tableSection(T_(rows, W)));
+  }
+
+  // ════ 6b. ORG CHART (portrait page) ══════════════════════
+  if (data.hrRows?.length) {
+    const orgChildren = buildOrgChartSection(data.hrRows);
+    sections.push({ properties:{ page: PAGE_PORTRAIT }, children: orgChildren });
+  }
+
+  // ════ 7. FIXED COSTS ══════════════════════════════════════
+  if (data.fixedRows?.length) {
+    const W = norm([149,500,1000,300,1400,1400,1400], TW_L);
+    const hdrs = ['#','الصنف','البيان','العدد','ملاحظات','التكلفة الشهرية للواحدة','التكلفة الشهرية الإجمالية'];
+    let tot=0; data.fixedRows.forEach(r=>{tot+=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0;});
+    const rows = [
+      secHdr('التكاليف الثابتة', 7),
+      colHdr(hdrs, W, C.COL_HDR_BLU, '000000'),
+      ...data.fixedRows.map((r,i)=>new TableRow({children:[
+        C_(i+1,          {fill:C.ROW_ODD,                  sz:28,w:W[0]}),
+        C_(r.cat||'',    {fill:i%2===0?C.WHITE:C.ROW_EVEN, sz:28,w:W[1],color:'000000'}),
+        C_(r.bayan||'',  {fill:i%2===0?C.WHITE:C.ROW_EVEN, sz:28,w:W[2],color:'000000'}),
+        C_(r.qty||'',    {fill:i%2===0?C.WHITE:C.ROW_EVEN, sz:28,w:W[3],color:'000000'}),
+        C_(r.notes||'',  {fill:i%2===0?C.WHITE:C.ROW_EVEN, sz:28,w:W[4],color:'000000'}),
+        C_(fM(r.price),  {fill:i%2===0?C.WHITE:C.ROW_EVEN, sz:28,w:W[5],color:'000000'}),
+        C_(fM(r.total),  {fill:i%2===0?C.WHITE:C.ROW_EVEN, sz:28,w:W[6],color:'000000'}),
+      ]})),
+      totRow('الإجمالي', fM(tot), 7, W[6]),
+    ];
+    sections.push(tableSection(T_(rows, W)));
+  }
+
+  // ════ 8. DEPRECIATION ════════════════════════════════════
+  if (data.depRows?.length) {
+    const W = norm([149,280,1350,450,225,1500,1500,1500], TW_L);
+    const hdrs = ['#','الصنف','البيان','نسبة الاهتلاك','العدد','ملاحظات','قيمة الاهتلاك للواحدة','قيمة الاهتلاك الإجمالية'];
+    let tot=0; data.depRows.forEach(r=>{tot+=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0;});
+    const rows = [
+      secHdr('الاهتلاك', 8),
+      colHdr(hdrs, W, C.COL_HDR_BLU, '000000'),
+      ...data.depRows.map((r,i)=>new TableRow({children:[
+        C_(i+1,                  {fill:C.ROW_ODD,                  sz:28,w:W[0]}),
+        C_(r.cat||'',            {fill:i%2===0?C.WHITE:C.ROW_EVEN, sz:28,w:W[1],color:'000000'}),
+        C_(r.bayan||'',          {fill:i%2===0?C.WHITE:C.ROW_EVEN, sz:28,w:W[2],color:'000000'}),
+        C_((r.pct||'0')+' %',    {fill:i%2===0?C.WHITE:C.ROW_EVEN, sz:28,w:W[3],color:'000000'}),
+        C_(r.qty||'',            {fill:i%2===0?C.WHITE:C.ROW_EVEN, sz:28,w:W[4],color:'000000'}),
+        C_(r.notes||'',          {fill:i%2===0?C.WHITE:C.ROW_EVEN, sz:28,w:W[5],color:'000000'}),
+        C_(fM(r.perUnit),        {fill:i%2===0?C.WHITE:C.ROW_EVEN, sz:28,w:W[6],color:'000000'}),
+        C_(fM(r.total),          {fill:i%2===0?C.WHITE:C.ROW_EVEN, sz:28,w:W[7],color:'000000'}),
+      ]})),
+      totRow('إجمالي قيمة الاهتلاك', fM(tot), 8, W[7]),
+    ];
+    sections.push(tableSection(T_(rows, W)));
+  }
+
+  const doc = new Document({ sections });
   return Packer.toBuffer(doc);
 }
+
+// ── Org Chart Section Builder ─────────────────────────────────
+function buildOrgChartSection(hrRows) {
+  // Parse employees
+  const employees = hrRows.map(r => ({
+    pos:     r.position||'',
+    type:    r.type||'',
+    qty:     parseInt(r.qty)||1,
+    reports: r.reports||'',
+  })).filter(e=>e.pos);
+
+  // Build tree map
+  const tree = {};
+  employees.forEach(e => {
+    const key = e.reports||'__root__';
+    if (!tree[key]) tree[key] = [];
+    tree[key].push(e);
+  });
+
+  const allPos = employees.map(e=>e.pos);
+  const roots = employees.filter(e=>!e.reports||!allPos.includes(e.reports));
+
+  const children = [];
+
+  // Title
+  children.push(new Paragraph({
+    bidirectional:true, alignment:AlignmentType.CENTER, spacing:{before:400,after:300},
+    children:[new TextRun({text:'الهيكل التنظيمي',bold:true,size:36,font:FONT,color:C.DARK_BLUE})],
+  }));
+
+  // Render tree using tables: each level is a row of cells
+  // We'll render level by level
+  function getLevels(nodeList, depth=0) {
+    const levels = [];
+    levels.push({ depth, nodes: nodeList });
+    nodeList.forEach(n => {
+      const ch = tree[n.pos]||[];
+      if (ch.length) {
+        const sub = getLevels(ch, depth+1);
+        sub.forEach((l,i) => {
+          const existing = levels.find(x=>x.depth===l.depth);
+          if (existing) existing.nodes.push(...l.nodes);
+          else levels.push(l);
+        });
+      }
+    });
+    return levels;
+  }
+
+  const levels = getLevels(roots);
+  // Sort levels by depth
+  levels.sort((a,b)=>a.depth-b.depth);
+
+  levels.forEach(level => {
+    const nodes = level.nodes;
+    // Each node = one box
+    const cellW = Math.floor(TW_P / Math.max(nodes.length, 1));
+    const lastW = TW_P - cellW * (nodes.length-1);
+
+    const row = new TableRow({ children: nodes.map((e,i) => {
+      const bg = orgColor(e.type);
+      const label = e.qty>1 ? `${e.pos} (${e.qty})` : e.pos;
+      return new TableCell({
+        width:{size: i===nodes.length-1?lastW:cellW, type:WidthType.DXA},
+        shading:{type:ShadingType.CLEAR, fill:bg, color:bg},
+        borders: BORDERS_AUTO,
+        margins:{top:120,bottom:120,left:120,right:120},
+        children:[
+          new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{after:0},
+            children:[new TextRun({text:`👤 ${label}`,bold:true,size:24,font:FONT,color:C.WHITE})]}),
+          new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{after:0},
+            children:[new TextRun({text:e.type,size:20,font:FONT,color:C.WHITE})]}),
+        ],
+      });
+    })});
+
+    const tbl = new Table({
+      width:{size:TW_P,type:WidthType.DXA},
+      columnWidths: nodes.map((_,i)=>i===nodes.length-1?lastW:cellW),
+      bidirectional:true,
+      rows:[row],
+    });
+    children.push(tbl);
+
+    // Add connector line if not last level
+    if (level.depth < levels[levels.length-1].depth) {
+      children.push(new Paragraph({
+        bidirectional:true, alignment:AlignmentType.CENTER,
+        spacing:{before:0,after:0},
+        children:[new TextRun({text:'│', size:28, font:FONT, color:C.DARK_BLUE})],
+      }));
+    }
+  });
+
+  return children;
+}
+
 
 // ════════════════════════════════════════════════════════════
 //  EMAIL SENDER
