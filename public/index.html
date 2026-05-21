@@ -361,13 +361,23 @@
       <div class="section-header">
         <div class="s-icon">1</div>
         <div>
-          <h3>فكرة المشروع</h3>
-          <p>أدخل وصفاً موجزاً لفكرة المشروع</p>
+          <h3>المعلومات الأساسية</h3>
+          <p>أدخل فكرة المشروع وبيانات المقدم</p>
         </div>
       </div>
       <div class="section-body">
         <label for="projectIdea">فكرة المشروع *</label>
         <textarea id="projectIdea" name="projectIdea" rows="4" placeholder="اكتب هنا وصفاً لفكرة المشروع..." oninput="updateSummary()"></textarea>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
+          <div>
+            <label for="applicantName">اسم مقدم المشروع *</label>
+            <input type="text" id="applicantName" name="applicantName" placeholder="الاسم الكامل">
+          </div>
+          <div>
+            <label for="applicantPhone">رقم الهاتف *</label>
+            <input type="text" id="applicantPhone" name="applicantPhone" placeholder="مثال: 0955123789">
+          </div>
+        </div>
       </div>
     </div>
 
@@ -924,7 +934,11 @@ function buildOpsTable() {
         tr.innerHTML = '';
       }
       tr.innerHTML += `<td style="text-align:right;padding-right:8px;font-size:13px">${comp}</td>` +
-        MONTHS.map((_,m) => `<td><input type="number" id="ops_${pid}_${ci}_${m}" min="0" value="0" oninput="calcOps(${pid})"></td>`).join('');
+        MONTHS.map((_,m) => {
+          const unitPrice = parseMoney(document.getElementById(`rev_uprice_${pid}_${m}`)?.value || 0);
+          const tip = `سعر مبيع الوحدة في هذا الشهر: ${fmtMoney(unitPrice)}`;
+          return `<td><input type="number" id="ops_${pid}_${ci}_${m}" min="0" value="0" title="${tip}" style="cursor:help" oninput="calcOps(${pid}); updateInputTooltip(this, ${pid}, ${m})"></td>`;
+        }).join('');
       tbody.appendChild(tr);
     });
     // product subtotal
@@ -939,6 +953,11 @@ function buildOpsTable() {
   let footHTML = '<tr class="total-row"><td colspan="3" style="text-align:right;padding-right:10px">الإجمالي</td>' +
     MONTHS.map((_,m) => `<td><input type="text" class="computed" id="ops_month_${m}" readonly value="$0"></td>`).join('') + '</tr>';
   tfoot.innerHTML = footHTML;
+}
+
+function updateInputTooltip(inp, pid, m) {
+  const price = parseMoney(document.getElementById(`rev_uprice_${pid}_${m}`)?.value || 0);
+  inp.title = `سعر مبيع الوحدة في هذا الشهر: ${fmtMoney(price)}`;
 }
 
 function calcOps(pid) {
@@ -956,8 +975,14 @@ function calcOps(pid) {
     if(sel) {
       sel.value = fmtMoney(sub);
       const revTotal = parseMoney(document.getElementById(`rev_total_${pid}_${m}`)?.value || 0);
-      sel.title = `إيرادات ${products[pid]?.name || ''} في هذا الشهر: ${fmtMoney(revTotal)}`;
+      sel.title = `إجمالي إيرادات ${products[pid]?.name || ''} في هذا الشهر: ${fmtMoney(revTotal)}`;
     }
+    // Update component input tooltips with unit price
+    const unitPrice = parseFloat(document.getElementById(`rev_uprice_${pid}_${m}`)?.value) || 0;
+    comps.forEach((_,ci2) => {
+      const compEl = document.getElementById(`ops_${pid}_${ci2}_${m}`);
+      if(compEl) compEl.title = `سعر مبيع الوحدة في هذا الشهر: ${fmtMoney(unitPrice)}`;
+    });
   }
   // grand total per month
   for(let m=0; m<12; m++) {
@@ -1224,13 +1249,16 @@ function buildOrgChart() {
   // Render node
   function nodeHtml(e) {
     const c = getTypeColor(e.type);
-    const label = e.qty > 1 ? `${e.pos} (${e.qty})` : e.pos;
-    const subLabel = e.type;
+    // Render each individual employee as a separate box
+    const boxes = [];
+    for (let i = 0; i < e.qty; i++) {
+      boxes.push(`<div class="org-node-box" style="background:${c.bg};color:${c.text}">
+        <div class="org-node-pos">👤 ${e.pos}</div>
+        <div class="org-node-type">${e.type}</div>
+      </div>`);
+    }
     return `<div class="org-node-wrap">
-      <div class="org-node-box" style="background:${c.bg};color:${c.text}">
-        <div class="org-node-pos">👤 ${label}</div>
-        <div class="org-node-type">${subLabel}</div>
-      </div>
+      <div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap">${boxes.join('')}</div>
       ${renderChildren(e.pos)}
     </div>`;
   }
@@ -1399,6 +1427,175 @@ buildProgress();
 addFoundingRow(); addFoundingRow(); addFoundingRow();
 addHRRow();
 addFixedRow(); addFixedRow();
+
+// ─── EDIT MODE: load saved submission ─────────────────────
+(function checkEditMode() {
+  const editData = sessionStorage.getItem('editData');
+  const editId   = sessionStorage.getItem('editId');
+  if (!editData || !editId) return;
+
+  sessionStorage.removeItem('editData');
+  sessionStorage.removeItem('editId');
+
+  const d = JSON.parse(editData);
+
+  // Show edit banner
+  const banner = document.createElement('div');
+  banner.style = 'background:#f59e0b;color:#fff;text-align:center;padding:10px;font-family:Cairo,sans-serif;font-weight:700;font-size:14px;direction:rtl';
+  banner.textContent = `✏️ وضع التعديل — رقم الطلب: ${editId}`;
+  document.body.insertBefore(banner, document.body.firstChild);
+
+  // Store edit ID globally
+  window._editId = editId;
+
+  // Override submit to send PUT instead of POST
+  const origSubmit = window.submitForm;
+  window.submitForm = async function() {
+    const data = collectFormData();
+    try {
+      const resp = await fetch('/api/submissions/' + editId, {
+        method: 'PUT',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(data)
+      });
+      const result = await resp.json();
+      if (result.success) {
+        document.getElementById('mainForm').style.display = 'none';
+        document.getElementById('successMsg').style.display = 'block';
+        document.getElementById('successMsg').querySelector('h2').textContent = '✅ تم تحديث النموذج بنجاح!';
+      } else {
+        alert('خطأ: ' + (result.message || 'غير معروف'));
+      }
+    } catch(e) { alert('تعذر الاتصال'); }
+  };
+
+  // Fill step 1
+  setTimeout(() => {
+    if (d.projectIdea)   { const el=document.getElementById('projectIdea');   if(el) { el.value=d.projectIdea; updateSummary(); } }
+    if (d.applicantName) { const el=document.getElementById('applicantName'); if(el) el.value=d.applicantName; }
+    if (d.applicantPhone){ const el=document.getElementById('applicantPhone');if(el) el.value=d.applicantPhone; }
+
+    // Fill founding rows — clear and refill
+    document.querySelectorAll('[id^="fr_"]').forEach(r=>r.remove());
+    foundingRowCount = 0;
+    (d.foundingRows||[]).forEach(r => {
+      addFoundingRow();
+      const n = foundingRowCount;
+      const cats = [...FOUNDING_CATS,...extraFoundingCats];
+      const catEl = document.getElementById('fcat_'+n);
+      if (catEl) { const opt=[...catEl.options].find(o=>o.value===r.cat); if(opt) catEl.value=r.cat; }
+      const b=document.getElementById('fbayan_'+n); if(b) b.value=r.bayan||'';
+      const dep=document.getElementById('fdep_'+n); if(dep) { dep.checked=r.dep||false; }
+      const q=document.getElementById('fqty_'+n); if(q) q.value=r.qty||'1';
+      const nt=document.getElementById('fnotes_'+n); if(nt) nt.value=r.notes||'';
+      const p=document.getElementById('fprice_'+n); if(p) p.value=r.price||'0';
+      calcFoundingRow(n);
+    });
+
+    // Fill products
+    Object.values(products).forEach((_,i)=>{ const pids=Object.keys(products); delProduct(parseInt(pids[pids.length-1]||1)); });
+    Object.keys(products).forEach(pid=>delProduct(parseInt(pid)));
+    productCount = 0;
+    Object.keys(d.products||{}).forEach(pid => {
+      const p = d.products[pid];
+      addProduct();
+      const newPid = productCount;
+      const nameEl=document.getElementById('pname_'+newPid); if(nameEl) { nameEl.value=p.name||''; updateProduct(newPid); }
+      const unitEl=document.getElementById('punit_'+newPid); if(unitEl) { unitEl.value=p.unit||''; updateProduct(newPid); }
+      (p.components||[]).filter(c=>c).forEach(comp => {
+        addComponent(newPid);
+        const idx=products[newPid].components.length-1;
+        const cEl=document.getElementById(`pcompname_${newPid}_${idx}`); if(cEl) { cEl.value=comp; products[newPid].components[idx]=comp; }
+      });
+    });
+
+    // Fill HR rows
+    document.querySelectorAll('[id^="hrr_"]').forEach(r=>r.remove());
+    hrRowCount = 0;
+    (d.hrRows||[]).forEach(r => {
+      addHRRow();
+      const n=hrRowCount;
+      const posEl=document.getElementById('hrpos_'+n); if(posEl) posEl.value=r.position||'';
+      const typEl=document.getElementById('hrtype_'+n); if(typEl) typEl.value=r.type||'';
+      const qEl=document.getElementById('hrqty_'+n); if(qEl) qEl.value=r.qty||'1';
+      const rEl=document.getElementById('hrreports_'+n); if(rEl) rEl.value=r.reports||'';
+      const sEl=document.getElementById('hrsalary_'+n); if(sEl) sEl.value=r.salary||'0';
+      calcHRRow(n);
+    });
+
+    // Fill fixed rows
+    document.querySelectorAll('[id^="fxr_"]').forEach(r=>r.remove());
+    fixedRowCount = 0;
+    (d.fixedRows||[]).forEach(r => {
+      addFixedRow();
+      const n=fixedRowCount;
+      const catEl=document.getElementById('fxcat_'+n); if(catEl) catEl.value=r.cat||'';
+      const bEl=document.getElementById('fxbayan_'+n); if(bEl) bEl.value=r.bayan||'';
+      const qEl=document.getElementById('fxqty_'+n); if(qEl) qEl.value=r.qty||'1';
+      const nEl=document.getElementById('fxnotes_'+n); if(nEl) nEl.value=r.notes||'';
+      const pEl=document.getElementById('fxprice_'+n); if(pEl) pEl.value=r.price||'0';
+      calcFixedRow(n);
+    });
+
+    updateSummary();
+    console.log('✅ Edit data loaded for:', editId);
+  }, 300);
+
+  // Revenue and Ops need to be loaded after tables are built
+  // Override goStep to populate data when reaching steps 4 & 5
+  const origGoStep = window.goStep;
+  const revLoaded = {done:false}, opsLoaded = {done:false};
+  window.goStep = function(n) {
+    origGoStep(n);
+    if (n===4 && !revLoaded.done) {
+      revLoaded.done = true;
+      setTimeout(() => {
+        const pids = Object.keys(d.products||{});
+        pids.forEach((pid,pi) => {
+          const localPid = pi+1; // matches new productCount ordering
+          const rev = d.revenueData?.[pid]||[];
+          for(let m=0;m<12;m++) {
+            const r=rev[m]||{};
+            const qEl=document.getElementById(`rev_qty_${localPid}_${m}`); if(qEl) qEl.value=r.qty||0;
+            const uEl=document.getElementById(`rev_uprice_${localPid}_${m}`); if(uEl) uEl.value=r.unitPrice||0;
+            calcRevenue(localPid, m);
+          }
+        });
+      }, 100);
+    }
+    if (n===5 && !opsLoaded.done) {
+      opsLoaded.done = true;
+      setTimeout(() => {
+        const pids = Object.keys(d.products||{});
+        pids.forEach((pid,pi) => {
+          const localPid = pi+1;
+          const opsD = d.opsData?.[pid]||{};
+          const p = d.products[pid];
+          const comps=(p.components||[]).filter(c=>c);
+          comps.forEach((_,ci) => {
+            for(let m=0;m<12;m++) {
+              const el=document.getElementById(`ops_${localPid}_${ci}_${m}`); if(el) el.value=opsD[`${ci}_${m}`]||0;
+            }
+          });
+          calcOps(localPid);
+        });
+      }, 100);
+    }
+    if (n===8 && d.depRows?.length) {
+      setTimeout(()=>{
+        d.depRows.forEach((r,i) => {
+          const n2=i+1;
+          // depRows are synced from founding — find matching checkbox
+          const pctEl=document.getElementById('dpct_'+Object.keys(document.querySelectorAll('[id^="dpct_"]'))[i]?.id?.replace('dpct_',''));
+          // Just update pct via direct DOM
+          document.querySelectorAll('[id^="dpct_"]').forEach((el,idx)=>{
+            if(idx===i) { el.value=d.depRows[idx]?.pct||'0'; el.dispatchEvent(new Event('input')); }
+          });
+        });
+      }, 100);
+    }
+  };
+})();
 </script>
 </body>
 </html>
