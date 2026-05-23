@@ -739,17 +739,6 @@ function buildSmartArtSection(hrRows) {
   // Since docx.js doesn't have native SmartArt API, we use a workaround:
   // Create an inline drawing that references the SmartArt diagrams
 
-  // Layout URI for orgChart1
-  const LAYOUT_URI = 'urn:microsoft.com/office/officeart/2005/8/layout/orgChart1';
-  const STYLE_URI  = 'urn:microsoft.com/office/officeart/2005/8/quickstyle/simple1';
-  const COLOR_URI  = 'urn:microsoft.com/office/officeart/2008/8/colors/colorful-accent1';
-
-  // Build the drawing XML that embeds SmartArt
-  const diagramId = 'dgm1';
-  const drawingXml = buildSmartArtDrawingXml(dataXml, LAYOUT_URI, STYLE_URI, COLOR_URI);
-
-  // We'll add it as a paragraph with an inline drawing
-  // Use docx.js Paragraph with raw XML
   const title = new Paragraph({
     bidirectional:true, alignment:AlignmentType.CENTER,
     spacing:{before:1000,after:400},
@@ -928,22 +917,36 @@ app.get('/api/submissions/:id', (req, res) => {
   res.json({ success:true, submission:JSON.parse(fs.readFileSync(fp,'utf8')) });
 });
 
-app.get('/api/download/:id/excel', (req, res) => {
+app.get('/api/download/:id/excel', async (req, res) => {
   const sid = req.params.id.replace(/[^A-Z0-9\-]/g,'');
-  const fp = path.join(DATA_DIR,`${sid}.xlsx`);
-  if (!fs.existsSync(fp)) return res.status(404).send('غير موجود');
-  res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition',`attachment; filename="project_${sid}.xlsx"`);
-  res.send(fs.readFileSync(fp));
+  const fp  = path.join(DATA_DIR, `${sid}.json`);
+  if (!fs.existsSync(fp)) return res.status(404).send('الطلب غير موجود');
+  try {
+    const data = JSON.parse(fs.readFileSync(fp,'utf8'));
+    const buf  = await generateExcel(data);
+    res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition',`attachment; filename="project_${sid}.xlsx"`);
+    res.send(buf);
+  } catch(e) {
+    console.error('Excel gen error:', e.message);
+    res.status(500).send('خطأ في توليد الملف: ' + e.message);
+  }
 });
 
-app.get('/api/download/:id/word', (req, res) => {
+app.get('/api/download/:id/word', async (req, res) => {
   const sid = req.params.id.replace(/[^A-Z0-9\-]/g,'');
-  const fp = path.join(DATA_DIR,`${sid}.docx`);
-  if (!fs.existsSync(fp)) return res.status(404).send('غير موجود');
-  res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-  res.setHeader('Content-Disposition',`attachment; filename="project_${sid}.docx"`);
-  res.send(fs.readFileSync(fp));
+  const fp  = path.join(DATA_DIR, `${sid}.json`);
+  if (!fs.existsSync(fp)) return res.status(404).send('الطلب غير موجود');
+  try {
+    const data = JSON.parse(fs.readFileSync(fp,'utf8'));
+    const buf  = await generateWord(data);
+    res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition',`attachment; filename="project_${sid}.docx"`);
+    res.send(buf);
+  } catch(e) {
+    console.error('Word gen error:', e.message);
+    res.status(500).send('خطأ في توليد الملف: ' + e.message);
+  }
 });
 
 // PATCH /api/submissions/:id/update — update basic fields and regenerate files
