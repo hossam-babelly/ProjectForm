@@ -291,6 +291,19 @@
   .org-node-wrap:only-child .org-children-row::before { display: none; }
   .org-row { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
 
+  /* Ops visible price hints */
+  .ops-price-hint, .ops-rev-hint {
+    font-size: 10px;
+    color: var(--success);
+    font-weight: 700;
+    text-align: center;
+    min-height: 14px;
+    line-height: 14px;
+    letter-spacing: 0.3px;
+  }
+  .ops-rev-hint { color: var(--primary-light); }
+  .dyn-table td:has(.ops-price-hint), .dyn-table td:has(.ops-rev-hint) { padding: 1px 2px; vertical-align: middle; }
+
   @media (max-width: 640px) {
     header { padding: 18px 16px; }
     .container { padding: 16px 12px 40px; }
@@ -675,6 +688,12 @@ function buildProgress() {
   });
 }
 
+// Track which tables have been built and with which product signature
+let _revBuiltSig = null, _opsBuiltSig = null;
+function _productSig() {
+  return JSON.stringify(Object.keys(products).filter(p=>products[p].name).map(p=>({n:products[p].name,u:products[p].unit,c:products[p].components.filter(c=>c)})));
+}
+
 function goStep(n) {
   document.querySelectorAll('.section-card').forEach(c => c.classList.remove('active'));
   document.querySelector(`.section-card[data-step="${n}"]`).classList.add('active');
@@ -684,8 +703,9 @@ function goStep(n) {
   document.getElementById('submitBtn').style.display = n === TOTAL_STEPS ? '' : 'none';
   document.getElementById('stepLabel').textContent = `خطوة ${n} من ${TOTAL_STEPS}`;
   buildProgress();
-  if(n === 4) buildRevenueTable();
-  if(n === 5) buildOpsTable();
+  const sig = _productSig();
+  if(n === 4) { if(_revBuiltSig !== sig) { buildRevenueTable(); _revBuiltSig = sig; } }
+  if(n === 5) { if(_opsBuiltSig !== sig) { buildOpsTable(); _opsBuiltSig = sig; } }
   if(n === 7) syncSalaryToFixed();
   if(n === 8) buildDepTable();
   window.scrollTo({top: 0, behavior:'smooth'});
@@ -936,8 +956,8 @@ function buildOpsTable() {
       tr.innerHTML += `<td style="text-align:right;padding-right:8px;font-size:13px">${comp}</td>` +
         MONTHS.map((_,m) => {
           const unitPrice = parseMoney(document.getElementById(`rev_uprice_${pid}_${m}`)?.value || 0);
-          const tip = `سعر مبيع الوحدة في هذا الشهر: ${fmtMoney(unitPrice)}`;
-          return `<td><input type="number" id="ops_${pid}_${ci}_${m}" min="0" value="0" title="${tip}" style="cursor:help" oninput="calcOps(${pid}); updateInputTooltip(this, ${pid}, ${m})"></td>`;
+          const priceLabel = unitPrice > 0 ? `💰${fmtNum(unitPrice)}` : '';
+          return `<td style="padding:2px 1px"><div class="ops-price-hint" id="ops_hint_${pid}_${ci}_${m}">${priceLabel}</div><input type="number" id="ops_${pid}_${ci}_${m}" min="0" value="0" oninput="calcOps(${pid}); updateOpsHints(${pid},${m})"></td>`;
         }).join('');
       tbody.appendChild(tr);
     });
@@ -945,7 +965,11 @@ function buildOpsTable() {
     const sttr = document.createElement('tr');
     sttr.className = 'total-row';
     sttr.innerHTML = `<td colspan="3" style="text-align:right;padding-right:10px">إجمالي ${p.name}</td>` +
-      MONTHS.map((_,m) => `<td><input type="text" class="computed" id="ops_sub_${pid}_${m}" readonly value="$0" title="إيرادات ${p.name} في هذا الشهر: " style="cursor:help"></td>`).join('');
+      MONTHS.map((_,m) => {
+        const revTot = parseMoney(document.getElementById(`rev_total_${pid}_${m}`)?.value || 0);
+        const revLabel = revTot > 0 ? `💰${fmtNum(revTot)}` : '';
+        return `<td style="padding:2px 1px"><div class="ops-rev-hint" id="ops_rev_hint_${pid}_${m}">${revLabel}</div><input type="text" class="computed" id="ops_sub_${pid}_${m}" readonly value="$0"></td>`;
+      }).join('');
     tbody.appendChild(sttr);
   });
 
@@ -955,9 +979,31 @@ function buildOpsTable() {
   tfoot.innerHTML = footHTML;
 }
 
-function updateInputTooltip(inp, pid, m) {
+function fmtNum(v) {
+  const n = parseFloat(String(v||'0').replace(/[^0-9.-]/g,''));
+  if(!n||isNaN(n)) return '0';
+  return n.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2});
+}
+function updateOpsHints(pid, m) {
   const price = parseMoney(document.getElementById(`rev_uprice_${pid}_${m}`)?.value || 0);
-  inp.title = `سعر مبيع الوحدة في هذا الشهر: ${fmtMoney(price)}`;
+  const priceLabel = price > 0 ? `💰${fmtNum(price)}` : '';
+  // Update all component hints for this product+month
+  const p = products[pid];
+  if(!p) return;
+  const comps = p.components.filter(c=>c);
+  comps.forEach((_,ci) => {
+    const hintEl = document.getElementById(`ops_hint_${pid}_${ci}_${m}`);
+    if(hintEl) hintEl.textContent = priceLabel;
+  });
+  // Update subtotal revenue hint
+  const revTot = parseMoney(document.getElementById(`rev_total_${pid}_${m}`)?.value || 0);
+  const revLabel = revTot > 0 ? `💰${fmtNum(revTot)}` : '';
+  const revHint = document.getElementById(`ops_rev_hint_${pid}_${m}`);
+  if(revHint) revHint.textContent = revLabel;
+}
+function updateInputTooltip(inp, pid, m) {
+  // kept for compatibility — hints now visible inline
+  updateOpsHints(pid, m);
 }
 
 function calcOps(pid) {
@@ -975,6 +1021,7 @@ function calcOps(pid) {
     if(sel) {
       sel.value = fmtMoney(sub);
       const revTotal = parseMoney(document.getElementById(`rev_total_${pid}_${m}`)?.value || 0);
+    updateOpsHints(pid, m);
       sel.title = `إجمالي إيرادات ${products[pid]?.name || ''} في هذا الشهر: ${fmtMoney(revTotal)}`;
     }
     // Update component input tooltips with unit price
