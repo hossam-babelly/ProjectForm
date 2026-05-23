@@ -12,6 +12,7 @@ const path       = require('path');
 const crypto     = require('crypto');
 const nodemailer = require('nodemailer');
 const ExcelJS    = require('exceljs');
+const JSZip      = require('jszip');
 const {
   Document, Packer, Paragraph, TextRun,
   Table, TableRow, TableCell,
@@ -298,7 +299,7 @@ function C_(text, o={}) {
 
 // ── Table ─────────────────────────────────────────────────────
 function T_(rows, W) {
-  return new Table({width:{size:TW,type:WidthType.DXA},columnWidths:W,bidirectional:true,rows});
+  return new Table({width:{size:TW,type:WidthType.DXA},columnWidths:W,bidirectional:true,visuallyRightToLeft:true,rows});
 }
 
 // ── Section header row ────────────────────────────────────────
@@ -352,68 +353,6 @@ function norm(arr,tw) {
   return r;
 }
 
-function orgColor(t){return ({إداري:C.ORG_ADM,تنفيذي:C.ORG_EXE,'مزود خدمة':C.ORG_SVC})[t]||C.ORG_OTH;}
-
-// ── SmartArt XML builder ──────────────────────────────────────
-function buildSmartArtXml(hrRows) {
-  // Expand employees by qty (each = individual)
-  const employees = [];
-  hrRows.forEach(r => {
-    const qty = parseInt(r.qty)||1;
-    for (let i=0;i<qty;i++) {
-      employees.push({pos:r.position||'',type:r.type||'',reports:r.reports||''});
-    }
-  });
-
-  // Build IDs
-  const ids = employees.map((_,i)=>
-    `{${i.toString(16).toUpperCase().padStart(8,'0')}-0000-0000-0000-${i.toString(16).padStart(12,'0')}}`
-  );
-  const ROOT_ID = '{00000000-0000-0000-0000-000000000000}';
-  const DOC_ID  = '{DOCID000-0000-0000-0000-000000000000}';
-
-  // Create position→id map (first occurrence)
-  const posToId = {};
-  employees.forEach((e,i) => {
-    if (!posToId[e.pos]) posToId[e.pos] = ids[i];
-  });
-
-  // Points
-  let ptList = `<dgm:pt modelId="${DOC_ID}" type="doc"/>\n`;
-  employees.forEach((e,i) => {
-    const isAsst = e.type === 'مزود خدمة';
-    const typeAttr = isAsst ? ' type="asst"' : '';
-    ptList += `<dgm:pt modelId="${ids[i]}"${typeAttr}><dgm:prSet lang="ar-SA" phldrT=""/><dgm:spPr/><p:txBody xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><a:bodyPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/><a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:r><a:t>${e.pos}</a:t></a:r></a:p><a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:r><a:t>(${e.type})</a:t></a:r></a:p></p:txBody></dgm:pt>\n`;
-  });
-
-  // Connections: doc→root, parent→child
-  let cxnList = '';
-  let cxnIdx = 100;
-  // doc to roots
-  employees.forEach((e,i) => {
-    if (!e.reports) {
-      cxnList += `<dgm:cxn modelId="{CXN${cxnIdx++}}" srcId="${DOC_ID}" destId="${ids[i]}" srcOrd="${i}" destOrd="0"/>\n`;
-    }
-  });
-  // parent to child
-  employees.forEach((e,i) => {
-    if (e.reports) {
-      const parentId = posToId[e.reports];
-      if (parentId) {
-        cxnList += `<dgm:cxn modelId="{CXN${cxnIdx++}}" srcId="${parentId}" destId="${ids[i]}" srcOrd="${i}" destOrd="0"/>\n`;
-      }
-    }
-  });
-
-  const data = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-<dgm:ptLst>${ptList}</dgm:ptLst>
-<dgm:cxnLst>${cxnList}</dgm:cxnLst>
-<dgm:bg/><dgm:whole/>
-</dgm:dataModel>`;
-
-  return data;
-}
 
 // ════════════════════════════════════════════════════════════════
 async function generateWord(data) {
@@ -615,11 +554,18 @@ async function generateWord(data) {
     ],W)));
   }
 
-  // ══ 6b. ORG CHART (SmartArt) ─────────────────────────────
+  // ══ 6b. ORG CHART PAGE — title paragraph, SmartArt injected post-process
   if (data.hrRows?.length) {
     sections.push({
       properties:{page:PAGE_P},
-      children: buildSmartArtSection(data.hrRows),
+      children: [
+        new Paragraph({
+          bidirectional:true, alignment:AlignmentType.CENTER,
+          spacing:{before:800,after:400},
+          children:[new TextRun({text:'الهيكل التنظيمي',bold:true,size:36,font:FONT,color:C.DARK_BLUE})],
+        }),
+        new Paragraph({children:[],spacing:{before:0,after:0}}),
+      ],
     });
   }
 
@@ -665,168 +611,198 @@ async function generateWord(data) {
     ],W)));
   }
 
-  return Packer.toBuffer(new Document({sections}));
+  // Build the base docx buffer
+  const baseBuffer = await Packer.toBuffer(new Document({sections}));
+
+  // Inject SmartArt into the docx zip if we have HR data
+  if (data.hrRows?.length) {
+    return injectSmartArt(baseBuffer, data.hrRows);
+  }
+  return baseBuffer;
 }
 
-// ── SmartArt Section (orgChart1 layout) ──────────────────────
-function buildSmartArtSection(hrRows) {
-  // Generate unique IDs
-  function uid(i) {
-    const h = i.toString(16).toUpperCase().padStart(8,'0');
-    return `{${h}-1111-1111-1111-${h.padStart(12,'0')}}`;
-  }
-  const DOC_ID = '{FFFFFFFF-0000-0000-0000-000000000000}';
+// ── SmartArt injection via JSZip ──────────────────────────────
+async function injectSmartArt(docxBuffer, hrRows) {
+  const zip = await JSZip.loadAsync(docxBuffer);
 
-  // Expand employees (each qty=N → N separate nodes)
+  // Build data1.xml with org hierarchy
+  const dataXml = buildSmartArtDataXml(hrRows);
+
+  // Layout: Hierarchy / Organisation Chart (standard MS layout URI)
+  const layoutXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<dgm:layoutDef xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+  uniqueId="urn:microsoft.com/office/officeart/2005/8/layout/orgchart1"
+  minVer="12.0">
+<dgm:title lang="" val=""/>
+<dgm:desc lang="" val=""/>
+<dgm:catLst><dgm:cat type="hierarchy" pri="10100"/></dgm:catLst>
+<dgm:layoutNode name="root"><dgm:varLst><dgm:var name="dir" val="norm"/><dgm:var name="animLvl" val="lvl"/><dgm:var name="animOne" val="one"/><dgm:var name="hierBranch" val="std"/></dgm:varLst></dgm:layoutNode>
+</dgm:layoutDef>`;
+
+  const colorsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<dgm:colorsDef xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+  uniqueId="urn:microsoft.com/office/officeart/2005/8/colors/colorful3"
+  minVer="12.0">
+<dgm:catLst><dgm:cat type="mainScheme" pri="10100"/></dgm:catLst>
+<dgm:styleLbl name="node0"><dgm:fillClrLst><a:schemeClr val="accent1"/></dgm:fillClrLst><dgm:linClrLst><a:schemeClr val="accent1"><a:shade val="50000"/></a:schemeClr></dgm:linClrLst><dgm:effectClrLst><a:schemeClr val="accent1"><a:tint val="50000"/></a:schemeClr></dgm:effectClrLst><dgm:txLinClrLst><a:schemeClr val="lt1"/></dgm:txLinClrLst><dgm:txFillClrLst><a:schemeClr val="lt1"/></dgm:txFillClrLst><dgm:txEffectClrLst><a:schemeClr val="lt1"/></dgm:txEffectClrLst></dgm:styleLbl>
+</dgm:colorsDef>`;
+
+  const styleXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<dgm:styleDef xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+  uniqueId="urn:microsoft.com/office/officeart/2005/8/quickstyle/qs1"
+  minVer="12.0">
+<dgm:catLst><dgm:cat type="mainScheme" pri="10100"/></dgm:catLst>
+<dgm:scene3d><a:camera prst="orthographicFront"/><a:lightRig rig="threePt" dir="t"/></dgm:scene3d>
+<dgm:styleLbl name="node0"><dgm:sp3d/><dgm:txPr/><dgm:style><a:lnRef idx="1"/><a:fillRef idx="2"/><a:effectRef idx="0"/><a:fontRef idx="minor"/></dgm:style></dgm:styleLbl>
+</dgm:styleDef>`;
+
+  // Drawing placeholder (dimensions match A4 portrait content width)
+  const cx = 8229600; // ~9.1 inches in EMU
+  const cy = 3500000; // ~3.9 inches
+  const drawingXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<dsp:drawing xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram"
+  xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+<dsp:spTree><dsp:nvGrpSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/></dsp:spTree>
+</dsp:drawing>`;
+
+  // Add diagram files to zip
+  const diagramFolder = 'word/diagrams/';
+  zip.file(`${diagramFolder}data1.xml`, dataXml);
+  zip.file(`${diagramFolder}layout1.xml`, layoutXml);
+  zip.file(`${diagramFolder}colors1.xml`, colorsXml);
+  zip.file(`${diagramFolder}quickStyle1.xml`, styleXml);
+  zip.file(`${diagramFolder}drawing1.xml`, drawingXml);
+
+  // Add relationship file for diagrams
+  const diagramRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData" Target="../diagrams/data1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramLayout" Target="../diagrams/layout1.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramQuickStyle" Target="../diagrams/quickStyle1.xml"/>
+  <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramColors" Target="../diagrams/colors1.xml"/>
+  <Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramDrawing" Target="../diagrams/drawing1.xml"/>
+</Relationships>`;
+
+  // Update document.xml.rels to add diagram relationships
+  const docRelsPath = 'word/_rels/document.xml.rels';
+  let relsXml = await zip.file(docRelsPath).async('string');
+
+  // Find the next available rId number
+  const existingIds = [...relsXml.matchAll(/Id="rId(\d+)"/g)].map(m=>parseInt(m[1]));
+  const maxId = existingIds.length ? Math.max(...existingIds) : 0;
+  const dm = `rId${maxId+1}`, lo = `rId${maxId+2}`, qs = `rId${maxId+3}`, cs = `rId${maxId+4}`, dw = `rId${maxId+5}`;
+
+  relsXml = relsXml.replace('</Relationships>',
+    `<Relationship Id="${dm}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData" Target="diagrams/data1.xml"/>
+<Relationship Id="${lo}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramLayout" Target="diagrams/layout1.xml"/>
+<Relationship Id="${qs}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramQuickStyle" Target="diagrams/quickStyle1.xml"/>
+<Relationship Id="${cs}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramColors" Target="diagrams/colors1.xml"/>
+<Relationship Id="${dw}" Type="http://schemas.microsoft.com/office/2007/relationships/diagramDrawing" Target="diagrams/drawing1.xml"/>
+</Relationships>`
+  );
+  zip.file(docRelsPath, relsXml);
+
+  // Find the org chart title paragraph in document.xml and insert SmartArt drawing after it
+  let docXml = await zip.file('word/document.xml').async('string');
+
+  const smartArtParagraph = `<w:p>
+<w:pPr><w:bidi w:val="1"/><w:jc w:val="center"/><w:rPr><w:rtl/></w:rPr></w:pPr>
+<w:r><w:drawing>
+<wp:inline distT="0" distB="0" distL="0" distR="0" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
+<wp:extent cx="${cx}" cy="${cy}"/>
+<wp:effectExtent l="0" t="0" r="0" b="0"/>
+<wp:docPr id="9001" name="الهيكل التنظيمي"/>
+<wp:cNvGraphicFramePr/>
+<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram">
+<dgm:relIds xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+  r:dm="${dm}" r:lo="${lo}" r:qs="${qs}" r:cs="${cs}"/>
+</a:graphicData>
+</a:graphic>
+</wp:inline>
+</w:r></w:drawing></w:p>`;
+
+  // Find the "الهيكل التنظيمي" text in the doc and insert SmartArt after its paragraph
+  docXml = docXml.replace(
+    /(<w:p[^>]*>(?:<[^>]+>)*<w:t[^>]*>\s*الهيكل التنظيمي\s*<\/w:t>.*?<\/w:p>)/s,
+    `$1\n${smartArtParagraph}`
+  );
+
+  zip.file('word/document.xml', docXml);
+
+  return zip.generateAsync({type:'nodebuffer', compression:'DEFLATE'});
+}
+
+function buildSmartArtDataXml(hrRows) {
+  // Expand employees by qty
   const nodes = [];
-  hrRows.forEach((r,ri) => {
+  hrRows.forEach(r => {
     const qty = parseInt(r.qty)||1;
-    for (let i=0;i<qty;i++) {
+    for(let i=0;i<qty;i++) {
+      const idx = nodes.length;
+      const pad = idx.toString(16).toUpperCase().padStart(8,'0');
       nodes.push({
-        id: uid(nodes.length+1),
+        id: `{${pad}-AAAA-BBBB-CCCC-${pad.padStart(12,'0')}}`,
         pos: r.position||'',
         type: r.type||'',
         reports: r.reports||'',
-        isAsst: r.type==='مزود خدمة',
+        isAsst: r.type === 'مزود خدمة',
       });
     }
   });
 
-  // posToId: position → first node's id
+  const DOC_ID = '{DOCID000-0000-0000-0000-FFFFFFFFFFFF}';
   const posToId = {};
-  nodes.forEach(n=>{ if(!posToId[n.pos]) posToId[n.pos]=n.id; });
+  nodes.forEach(n => { if(!posToId[n.pos]) posToId[n.pos] = n.id; });
 
-  // Build data XML
-  let ptXml = `<dgm:pt modelId="${DOC_ID}" type="doc"/>`;
-  let parTransIdx=200, sibTransIdx=300;
-  nodes.forEach(n=>{
+  let ptXml = `<dgm:pt modelId="${DOC_ID}" type="doc"><dgm:prSet/></dgm:pt>\n`;
+  nodes.forEach((n,i) => {
     const typeAttr = n.isAsst ? ' type="asst"' : '';
+    const par = `{PAR${i.toString(16).toUpperCase().padStart(8,'0')}}`;
+    const sib = `{SIB${i.toString(16).toUpperCase().padStart(8,'0')}}`;
     ptXml += `<dgm:pt modelId="${n.id}"${typeAttr}>`;
-    ptXml += `<dgm:prSet lang="ar-SA"/>`;
+    ptXml += `<dgm:prSet lang="ar-SA" phldrT=""/>`;
     ptXml += `<dgm:spPr/>`;
     ptXml += `<p:txBody xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">`;
     ptXml += `<a:bodyPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>`;
     ptXml += `<a:lstStyle xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>`;
-    ptXml += `<a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:r><a:t>${n.pos}</a:t></a:r></a:p>`;
-    ptXml += `<a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:r><a:t>(${n.type})</a:t></a:r></a:p>`;
+    ptXml += `<a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:r><a:t>${escXml(n.pos)}</a:t></a:r></a:p>`;
+    ptXml += `<a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:r><a:t>${escXml(n.type)}</a:t></a:r></a:p>`;
     ptXml += `</p:txBody></dgm:pt>`;
-    // parTrans and sibTrans
-    ptXml += `<dgm:pt modelId="{PT${parTransIdx++}}" type="parTrans"><dgm:prSet lang="ar-SA"/></dgm:pt>`;
-    ptXml += `<dgm:pt modelId="{PT${sibTransIdx++}}" type="sibTrans"><dgm:prSet lang="ar-SA"/></dgm:pt>`;
+    ptXml += `<dgm:pt modelId="${par}" type="parTrans"><dgm:prSet lang="ar-SA"/></dgm:pt>`;
+    ptXml += `<dgm:pt modelId="${sib}" type="sibTrans"><dgm:prSet lang="ar-SA"/></dgm:pt>`;
   });
 
   let cxnXml = '';
-  let cxnId = 500;
-  nodes.forEach((n,i)=>{
+  let ci = 1000;
+  nodes.forEach((n,i) => {
+    const cid = `{CXN${ci.toString(16).toUpperCase().padStart(8,'0')}}`;
+    ci++;
     if (!n.reports) {
-      cxnXml += `<dgm:cxn modelId="{CX${cxnId++}}" srcId="${DOC_ID}" destId="${n.id}" srcOrd="${i}" destOrd="0"/>`;
+      cxnXml += `<dgm:cxn modelId="${cid}" srcId="${DOC_ID}" destId="${n.id}" srcOrd="${i}" destOrd="0"/>`;
     } else {
       const pid = posToId[n.reports];
-      if (pid) cxnXml += `<dgm:cxn modelId="{CX${cxnId++}}" srcId="${pid}" destId="${n.id}" srcOrd="${i}" destOrd="0"/>`;
+      if(pid) cxnXml += `<dgm:cxn modelId="${cid}" srcId="${pid}" destId="${n.id}" srcOrd="${i}" destOrd="0"/>`;
     }
   });
 
-  const dataXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"
-  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+  xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
 <dgm:ptLst>${ptXml}</dgm:ptLst>
 <dgm:cxnLst>${cxnXml}</dgm:cxnLst>
-<dgm:bg/><dgm:whole/>
+<dgm:bg/>
+<dgm:whole/>
 </dgm:dataModel>`;
-
-  // Use the EXACT same layout/style/color files from the original docx
-  // We embed them as base64 references via docx.js Media injection
-  // Since docx.js doesn't have native SmartArt API, we use a workaround:
-  // Create an inline drawing that references the SmartArt diagrams
-
-  const title = new Paragraph({
-    bidirectional:true, alignment:AlignmentType.CENTER,
-    spacing:{before:1000,after:400},
-    children:[new TextRun({text:'الهيكل التنظيمي',bold:true,size:36,font:FONT,color:C.DARK_BLUE})],
-  });
-
-  // Build org chart using colored table boxes (most compatible approach)
-  const orgTable = buildOrgChartTable(nodes, posToId);
-
-  return [title, orgTable, SP()];
 }
 
-function buildOrgChartTable(nodes, posToId) {
-  // Group nodes by their reporting level
-  const allPos = nodes.map(n=>n.pos);
-  const roots = nodes.filter(n=>!n.reports||!allPos.includes(n.reports));
-
-  // Get children of a position
-  function getChildren(pos) { return nodes.filter(n=>n.reports===pos); }
-
-  // Calculate max depth
-  function depth(pos, visited=new Set()) {
-    if (visited.has(pos)) return 0;
-    visited.add(pos);
-    const ch = getChildren(pos);
-    if (!ch.length) return 1;
-    return 1 + Math.max(...ch.map(c=>depth(c.pos, new Set(visited))));
-  }
-
-  // BFS to get levels
-  const levels = [];
-  const queue = [...roots];
-  const seen = new Set();
-  while (queue.length) {
-    const levelNodes = [...queue];
-    queue.length = 0;
-    const newLevel = [];
-    levelNodes.forEach(n => {
-      if (seen.has(n.id)) return;
-      seen.add(n.id);
-      newLevel.push(n);
-      getChildren(n.pos).forEach(c=>queue.push(c));
-    });
-    if (newLevel.length) levels.push(newLevel);
-  }
-
-  const tableChildren = [];
-  const TW_P = 10466;
-
-  levels.forEach((level, li) => {
-    const colW = Math.floor(TW_P / level.length);
-    const lastW = TW_P - colW*(level.length-1);
-    const row = new TableRow({children: level.map((n,i)=>{
-      const bg = orgColor(n.type);
-      return new TableCell({
-        width:{size:i===level.length-1?lastW:colW,type:WidthType.DXA},
-        shading:{type:ShadingType.CLEAR,fill:bg,color:bg},
-        borders:BORDERS, margins:{top:100,bottom:100,left:100,right:100},
-        verticalAlign:VerticalAlign.CENTER,
-        children:[
-          new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{after:0},
-            children:[new TextRun({text:n.pos,bold:true,size:24,font:FONT,color:C.WHITE})]}),
-          new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{after:0},
-            children:[new TextRun({text:`(${n.type})`,bold:false,size:20,font:FONT,color:C.WHITE})]}),
-        ],
-      });
-    })});
-    tableChildren.push(row);
-
-    // Add connector row if not last level
-    if (li < levels.length-1) {
-      tableChildren.push(new TableRow({children:[new TableCell({
-        columnSpan:level.length,
-        borders:{top:BDR(),bottom:BDR(),left:BDR(),right:BDR()},
-        width:{size:TW_P,type:WidthType.DXA},
-        margins:{top:20,bottom:20,left:80,right:80},
-        children:[new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{after:0},
-          children:[new TextRun({text:'│',size:20,font:FONT,color:C.DARK_BLUE})]})],
-      })]}));
-    }
-  });
-
-  return new Table({
-    width:{size:TW_P,type:WidthType.DXA},
-    columnWidths: Array(levels[0]?.length||1).fill(Math.floor(TW_P/(levels[0]?.length||1))),
-    bidirectional:true,
-    rows:tableChildren,
-  });
+function escXml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 
