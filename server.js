@@ -141,11 +141,11 @@ async function generateExcel(data) {
   if (data.foundingRows?.length) {
     const s1 = wb.addWorksheet('التكاليف التأسيسية', { rightToLeft:true });
     s1.columns = [
-      {width:6},{width:16},{width:24},{width:10},{width:8},{width:20},{width:20},{width:20}
+      {width:6},{width:16},{width:24},{width:10},{width:20},{width:20},{width:8},{width:20}
     ];
     const hr = s1.getRow(1);
     hr.height = 24;
-    ['#','الصنف','البيان','اهتلاك','العدد','ملاحظات','التكلفة للواحدة ($)','التكلفة الإجمالية ($)']
+    ['#','الصنف','البيان','اهتلاك','ملاحظات','التكلفة للواحدة ($)','العدد','التكلفة الإجمالية ($)']
       .forEach((h,i) => { hr.getCell(i+1).value=h; Object.assign(hr.getCell(i+1), hStyle(C_HEADER)); });
 
     let tot = 0;
@@ -154,11 +154,11 @@ async function generateExcel(data) {
       tot += v;
       const row = s1.getRow(i+2);
       row.height = 20;
-      [r ? i+1 : '', r.cat, r.bayan, r.dep?'✓':'', r.qty, r.notes, parseFloat(r.price)||0, v]
+      [r ? i+1 : '', r.cat, r.bayan, r.dep?'✓':'', r.notes, parseFloat(r.price)||0, r.qty, v]
         .forEach((val,c) => {
           row.getCell(c+1).value = val;
           Object.assign(row.getCell(c+1), dStyle());
-          if(c===6||c===7) row.getCell(c+1).numFmt='"$"#,##0.00';
+          if(c===5||c===7) row.getCell(c+1).numFmt='"$"#,##0.00';
         });
     });
     const n = data.foundingRows.length;
@@ -208,51 +208,55 @@ async function generateExcel(data) {
   // ── Sheet 4: التكاليف الثابتة ─────────────────────────
   if (data.fixedRows?.length) {
     const s4 = wb.addWorksheet('التكاليف الثابتة', { rightToLeft:true });
-    s4.columns = [{width:6},{width:16},{width:24},{width:8},{width:20},{width:22},{width:22}];
+    s4.columns = [{width:6},{width:16},{width:24},{width:20},{width:22},{width:8},{width:22}];
     const hr = s4.getRow(1); hr.height=24;
-    ['#','الصنف','البيان','العدد','ملاحظات','التكلفة الشهرية للواحدة ($)','التكلفة الشهرية الإجمالية ($)']
+    ['#','الصنف','البيان','ملاحظات','التكلفة الشهرية للواحدة ($)','العدد','التكلفة الشهرية الإجمالية ($)']
       .forEach((h,i) => { hr.getCell(i+1).value=h; Object.assign(hr.getCell(i+1), hStyle(C_HEADER)); });
 
+    const isSalaryRow=(r)=>(r.cat==='رواتب') && (String(r.bayan||'').includes('الموظفين') || String(r.notes||'').includes('تلقائي'));
     let tot=0;
     data.fixedRows.forEach((r,i) => {
       const v = parseFloat(String(r.total||'0').replace(/[^0-9.]/g,''))||0;
-      tot+=v;
+      tot += isSalaryRow(r) ? v : v*12;
       const row = s4.getRow(i+2); row.height=20;
-      [i+1, r.cat, r.bayan, r.qty, r.notes, parseFloat(r.price)||0, v]
+      [i+1, r.cat, r.bayan, r.notes, parseFloat(r.price)||0, r.qty, v]
         .forEach((val,c) => {
           row.getCell(c+1).value=val; Object.assign(row.getCell(c+1),dStyle());
-          if(c===5||c===6) row.getCell(c+1).numFmt='"$"#,##0.00';
+          if(c===4||c===6) row.getCell(c+1).numFmt='"$"#,##0.00';
         });
     });
     const n = data.fixedRows.length;
     s4.mergeCells(`A${n+2}:F${n+2}`);
-    s4.getCell(`A${n+2}`).value='الإجمالي الشهري'; Object.assign(s4.getCell(`A${n+2}`),tStyle(C_TOTAL));
+    s4.getCell(`A${n+2}`).value='الإجمالي (سنوياً)'; Object.assign(s4.getCell(`A${n+2}`),tStyle(C_TOTAL));
     s4.getCell(`G${n+2}`).value=tot; s4.getCell(`G${n+2}`).numFmt='"$"#,##0.00'; Object.assign(s4.getCell(`G${n+2}`),tStyle(C_TOTAL));
   }
 
   // ── Sheet 5: الموارد البشرية ──────────────────────────
   if (data.hrRows?.length) {
     const s5 = wb.addWorksheet('الموارد البشرية', { rightToLeft:true });
-    s5.columns = [{width:6},{width:20},{width:16},{width:8},{width:20},{width:22},{width:22}];
+    s5.columns = [{width:6},{width:20},{width:16},{width:20},{width:20},{width:14},{width:8},{width:22}];
     const hr = s5.getRow(1); hr.height=24;
-    ['#','المنصب','النوع','العدد','تابع لـ','الراتب الشهري الفردي ($)','الراتب الشهري الإجمالي ($)']
+    ['#','المنصب','النوع','تابع لـ','الراتب الشهري الفردي ($)','عدد أشهر الدوام في السنة','العدد','الراتب الشهري الإجمالي ($)']
       .forEach((h,i) => { hr.getCell(i+1).value=h; Object.assign(hr.getCell(i+1), hStyle(C_HEADER)); });
 
     let tot=0;
     data.hrRows.forEach((r,i) => {
       const v = parseFloat(String(r.total||'0').replace(/[^0-9.]/g,''))||0;
-      tot+=v;
+      const q=parseFloat(r.qty)||0;
+      const s=parseFloat(String(r.salary||'0').replace(/[^0-9.-]/g,''))||0;
+      const mo=parseFloat(r.months)||12;
+      tot += q*s*mo;
       const row = s5.getRow(i+2); row.height=20;
-      [i+1, r.position, r.type, r.qty, r.reports, parseFloat(r.salary)||0, v]
+      [i+1, r.position, r.type, r.reports, parseFloat(r.salary)||0, mo, r.qty, v]
         .forEach((val,c) => {
           row.getCell(c+1).value=val; Object.assign(row.getCell(c+1),dStyle());
-          if(c===5||c===6) row.getCell(c+1).numFmt='"$"#,##0.00';
+          if(c===4||c===7) row.getCell(c+1).numFmt='"$"#,##0.00';
         });
     });
     const n = data.hrRows.length;
-    s5.mergeCells(`A${n+2}:F${n+2}`);
-    s5.getCell(`A${n+2}`).value='إجمالي الرواتب'; Object.assign(s5.getCell(`A${n+2}`),tStyle(C_TOTAL));
-    s5.getCell(`G${n+2}`).value=tot; s5.getCell(`G${n+2}`).numFmt='"$"#,##0.00'; Object.assign(s5.getCell(`G${n+2}`),tStyle(C_TOTAL));
+    s5.mergeCells(`A${n+2}:G${n+2}`);
+    s5.getCell(`A${n+2}`).value='إجمالي الرواتب (سنوياً)'; Object.assign(s5.getCell(`A${n+2}`),tStyle(C_TOTAL));
+    s5.getCell(`H${n+2}`).value=tot; s5.getCell(`H${n+2}`).numFmt='"$"#,##0.00'; Object.assign(s5.getCell(`H${n+2}`),tStyle(C_TOTAL));
   }
 
   return wb.xlsx.writeBuffer();
@@ -287,13 +291,13 @@ const FONT = 'Sakkal Majalla';
 // exact per-table column widths (DXA) extracted from الملف المطلوب
 const COLW = {
   summary : [7740,7648],
-  founding: [454,857,4206,1165,713,4677,1529,1787],
+  founding: [454,857,4206,1165,4677,1529,713,1787],
   products: [4822,4841,5705],
   revenue : [2313,1167,940,940,940,940,940,982,982,982,941,1094,1094,1113],
   ops     : [1332,877,1213,964,986,986,986,987,1036,987,987,1036,990,990,1011],
-  hr      : [459,2791,2696,988,3964,2250,2240],
-  fixed   : [609,1530,3268,902,4318,2342,2419],
-  dep     : [411,857,4164,1397,687,4638,1486,1748],
+  hr      : [459,2791,1800,2600,2100,2300,988,2240],
+  fixed   : [609,1530,3268,4318,2342,902,2419],
+  dep     : [411,857,4164,1397,4638,1486,687,1748],
 };
 
 const BDR = (c='auto',s=4) => ({style:BorderStyle.SINGLE,size:s,color:c});
@@ -396,8 +400,11 @@ async function generateWord(data) {
       children:[new TextRun({text:'نموذج طرح دراسة مشروع',bold:true,size:28,font:FONT,color:C.TITLE_ORANGE})]}),
   );
 
-  // add a new page then a top spacer, before each subsequent table
-  const page = (...tbls)=>{ ch.push(PB(), SP(1300,28), ...tbls); };
+  // each table lives in its OWN section, vertically centred on its page
+  const sections = [];
+  const mkSec = (children, valign=VerticalAlign.CENTER) =>
+    ({ properties:{ page:PAGE, verticalAlign:valign }, headers:{default:buildHeader()}, children });
+  const page = (...tbls)=>{ sections.push(mkSec(tbls, VerticalAlign.CENTER)); };
 
   // ══ 1. SUMMARY ══════════════════════════════════════════
   {
@@ -416,11 +423,13 @@ async function generateWord(data) {
         ['الربح الصافي (سنوياً)',data.summary?.netProfit||'$0'],
         ['عدد الموظفين في المشروع',String(data.summary?.employees||'0')],
       ].map(([l,v])=>new TableRow({children:[
-        C_(l,{fill:C.SUM_LBL,bold:true,sz:28,w:W[0],align:AlignmentType.RIGHT}),
-        C_(v,{fill:C.SUM_VAL,bold:true,sz:28,w:W[1]}),
+        C_(l,{fill:C.SUM_LBL,bold:true,sz:28,w:W[0],align:AlignmentType.CENTER}),
+        C_(v,{fill:C.SUM_VAL,bold:true,sz:28,w:W[1],align:AlignmentType.CENTER}),
       ]})),
     ],W));
   }
+  // section 1 = title + summary (top-aligned)
+  sections.push(mkSec(ch, VerticalAlign.TOP));
 
   // ══ 2. FOUNDING ═════════════════════════════════════════
   if (data.foundingRows?.length) {
@@ -428,15 +437,15 @@ async function generateWord(data) {
     let tot=0; data.foundingRows.forEach(r=>{tot+=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0;});
     page(T_([
       secHdr('التكاليف التأسيسية',8),
-      colHdr(['#','الصنف','البيان','الاهتلاك','العدد','ملاحظات','التكلفة للواحدة','التكلفة الإجمالية'],W,C.COL_HDR_BLU),
+      colHdr(['#','الصنف','البيان','الاهتلاك','ملاحظات','التكلفة للواحدة','العدد','التكلفة الإجمالية'],W,C.COL_HDR_BLU),
       ...data.foundingRows.map((r,i)=>new TableRow({children:[
         C_(i+1,         {fill:C.NUM_TINT,sz:28,w:W[0]}),
         C_(r.cat||'',   {fill:dFill(i),sz:28,w:W[1]}),
         C_(r.bayan||'', {fill:dFill(i),sz:28,w:W[2]}),
         C_(r.dep?'a':'r',{fill:dFill(i),sz:28,w:W[3],font:'Marlett',color:'000000'}),
-        C_(r.qty||'',   {fill:dFill(i),sz:28,w:W[4]}),
-        C_(r.notes||'', {fill:dFill(i),sz:28,w:W[5]}),
-        C_(fM(r.price), {fill:dFill(i),sz:28,w:W[6]}),
+        C_(r.notes||'', {fill:dFill(i),sz:28,w:W[4]}),
+        C_(fM(r.price), {fill:dFill(i),sz:28,w:W[5]}),
+        C_(r.qty||'',   {fill:dFill(i),sz:28,w:W[6]}),
         C_(fM(r.total), {fill:dFill(i),sz:28,w:W[7]}),
       ]})),
       totRow('الإجمالي',fM(tot),8,W[7]),
@@ -544,48 +553,58 @@ async function generateWord(data) {
   // ══ 6. HR ════════════════════════════════════════════════
   if (data.hrRows?.length) {
     const W=norm(COLW.hr,TW);
-    let tot=0; data.hrRows.forEach(r=>{tot+=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0;});
+    let tot=0; data.hrRows.forEach(r=>{
+      const q=parseFloat(r.qty)||0;
+      const s=parseFloat(String(r.salary||'0').replace(/[^0-9.-]/g,''))||0;
+      const mo=parseFloat(r.months)||12;
+      tot += q*s*mo;
+    });
     page(T_([
-      secHdr('الموارد البشرية',7),
-      colHdr(['#','المنصب','النوع','العدد','تابع لـ','الراتب الشهري الفردي','الراتب الشهري الإجمالي'],W,C.COL_HDR_BLU),
+      secHdr('الموارد البشرية',8),
+      colHdr(['#','المنصب','النوع','تابع لـ','الراتب الشهري الفردي','عدد أشهر الدوام في السنة','العدد','الراتب الشهري الإجمالي'],W,C.COL_HDR_BLU),
       ...data.hrRows.map((r,i)=>new TableRow({children:[
         C_(i+1,            {fill:C.NUM_TINT,sz:28,w:W[0]}),
         C_(r.position||'', {fill:dFill(i),sz:28,w:W[1]}),
         C_(r.type||'',     {fill:dFill(i),sz:28,w:W[2]}),
-        C_(r.qty||'',      {fill:dFill(i),sz:28,w:W[3]}),
-        C_(r.reports||'----------', {fill:dFill(i),sz:28,w:W[4]}),
-        C_(fM(r.salary),   {fill:dFill(i),sz:28,w:W[5]}),
-        C_(fM(r.total),    {fill:dFill(i),sz:28,w:W[6]}),
+        C_(r.reports||'----------', {fill:dFill(i),sz:28,w:W[3]}),
+        C_(fM(r.salary),   {fill:dFill(i),sz:28,w:W[4]}),
+        C_(r.months||'12', {fill:dFill(i),sz:28,w:W[5]}),
+        C_(r.qty||'',      {fill:dFill(i),sz:28,w:W[6]}),
+        C_(fM(r.total),    {fill:dFill(i),sz:28,w:W[7]}),
       ]})),
-      totRow('الإجمالي',fM(tot),7,W[6]),
+      totRow('الإجمالي (سنوياً)',fM(tot),8,W[7]),
     ],W));
 
-    // org-chart page (native table — colours by type, children under parents)
-    ch.push(
-      PB(), SP(1100,28),
-      new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{before:0,after:240},
+    // org-chart page (own section; SmartArt-like shapes injected post-process)
+    sections.push(mkSec([
+      new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{before:200,after:200},
         children:[new TextRun({text:'الهيكل التنظيمي',bold:true,size:32,font:FONT,color:C.DARK_BLUE})]}),
-      buildOrgChartTable(data.hrRows),
-    );
+      new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{before:0,after:0},
+        children:[new TextRun({text:'[[ORGCHART]]',size:2,font:FONT,color:'FFFFFF'})]}),
+    ], VerticalAlign.TOP));
   }
 
   // ══ 7. FIXED ════════════════════════════════════════════
   if (data.fixedRows?.length) {
     const W=norm(COLW.fixed,TW);
-    let tot=0; data.fixedRows.forEach(r=>{tot+=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0;});
+    const isSalaryRow=(r)=>(r.cat==='رواتب') && (String(r.bayan||'').includes('الموظفين') || String(r.notes||'').includes('تلقائي'));
+    let tot=0; data.fixedRows.forEach(r=>{
+      const t=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0;
+      tot += isSalaryRow(r) ? t : t*12;   // salary row already annual; others monthly×12
+    });
     page(T_([
       secHdr('التكاليف الثابتة',7),
-      colHdr(['#','الصنف','البيان','العدد','ملاحظات','التكلفة الشهرية للواحدة','التكلفة الشهرية الإجمالية'],W,C.COL_HDR_BLU),
+      colHdr(['#','الصنف','البيان','ملاحظات','التكلفة الشهرية للواحدة','العدد','التكلفة الشهرية الإجمالية'],W,C.COL_HDR_BLU),
       ...data.fixedRows.map((r,i)=>new TableRow({children:[
         C_(i+1,         {fill:C.NUM_TINT,sz:28,w:W[0]}),
         C_(r.cat||'',   {fill:dFill(i),sz:28,w:W[1]}),
         C_(r.bayan||'', {fill:dFill(i),sz:28,w:W[2]}),
-        C_(r.qty||'',   {fill:dFill(i),sz:28,w:W[3]}),
-        C_(r.notes||'', {fill:dFill(i),sz:28,w:W[4]}),
-        C_(fM(r.price), {fill:dFill(i),sz:28,w:W[5]}),
+        C_(r.notes||'', {fill:dFill(i),sz:28,w:W[3]}),
+        C_(fM(r.price), {fill:dFill(i),sz:28,w:W[4]}),
+        C_(r.qty||'',   {fill:dFill(i),sz:28,w:W[5]}),
         C_(fM(r.total), {fill:dFill(i),sz:28,w:W[6]}),
       ]})),
-      totRow('الإجمالي',fM(tot),7,W[6]),
+      totRow('الإجمالي (سنوياً)',fM(tot),7,W[6]),
     ],W));
   }
 
@@ -595,24 +614,24 @@ async function generateWord(data) {
     let tot=0; data.depRows.forEach(r=>{tot+=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0;});
     page(T_([
       secHdr('الاهتلاك',8),
-      colHdr(['#','الصنف','البيان','نسبة الاهتلاك','العدد','ملاحظات','قيمة الاهتلاك للواحدة','قيمة الاهتلاك الإجمالية'],W,C.COL_HDR_BLU),
+      colHdr(['#','الصنف','البيان','نسبة الاهتلاك','ملاحظات','قيمة الاهتلاك للواحدة','العدد','قيمة الاهتلاك الإجمالية'],W,C.COL_HDR_BLU),
       ...data.depRows.map((r,i)=>new TableRow({children:[
         C_(i+1,               {fill:C.NUM_TINT,sz:28,w:W[0]}),
         C_(r.cat||'',         {fill:dFill(i),sz:28,w:W[1]}),
         C_(r.bayan||'',       {fill:dFill(i),sz:28,w:W[2]}),
         C_((r.pct||'0')+' %', {fill:dFill(i),sz:28,w:W[3]}),
-        C_(r.qty||'',         {fill:dFill(i),sz:28,w:W[4]}),
-        C_(r.notes||'',       {fill:dFill(i),sz:28,w:W[5]}),
-        C_(fM(r.perUnit),     {fill:dFill(i),sz:28,w:W[6]}),
+        C_(r.notes||'',       {fill:dFill(i),sz:28,w:W[4]}),
+        C_(fM(r.perUnit),     {fill:dFill(i),sz:28,w:W[5]}),
+        C_(r.qty||'',         {fill:dFill(i),sz:28,w:W[6]}),
         C_(fM(r.total),       {fill:dFill(i),sz:28,w:W[7]}),
       ]})),
       totRow('إجمالي قيمة الاهتلاك',fM(tot),8,W[7]),
     ],W));
   }
 
-  const sections = [{ properties:{page:PAGE}, headers:{default:buildHeader()}, children:ch }];
   const buf = await Packer.toBuffer(new Document({sections}));
-  return finalizeDocx(buf);
+  const withChart = await injectOrgChart(buf, data.hrRows);
+  return finalizeDocx(withChart);
 }
 
 // docx may emit word/fontTable.xml without a relationship → add it so the
@@ -674,78 +693,114 @@ function buildOrgTree(persons,posId){
   return roots;
 }
 
-// ── org chart as a native Word TABLE (renders text + colours everywhere) ──
-// Children sit directly under their parent (column-span by leaf count).
-function buildOrgChartTable(hrRows){
+// ── org-chart layout (positions in EMU; parents centred over children) ──
+function orgLayout(hrRows){
   const {persons,posId}=buildPersons(hrRows);
   const roots=buildOrgTree(persons,posId);
-
-  // assign leaf columns + subtree span + depth
-  let col=0, maxDepth=0;
-  (function walk(nodes,d){
+  const boxW=1750000, boxH=820000, hGap=240000, vGap=620000;
+  let cursor=0;
+  (function place(nodes,depth){
     nodes.forEach(n=>{
-      n.depth=d; if(d>maxDepth) maxDepth=d;
-      if(!n.children.length){ n.c0=col; n.c1=col; col++; }
-      else { walk(n.children,d+1); n.c0=n.children[0].c0; n.c1=n.children[n.children.length-1].c1; }
+      n.depth=depth;
+      if(!n.children.length){ n.x=cursor*(boxW+hGap); cursor++; }
+      else { place(n.children,depth+1); n.x=(n.children[0].x+n.children[n.children.length-1].x)/2; }
+      n.y=depth*(boxH+vGap);
     });
   })(roots,0);
-  const ncols=Math.max(col,1);
+  const all=[]; (function col(nodes){nodes.forEach(n=>{all.push(n); n.children.length&&col(n.children);});})(roots);
+  if(!all.length) return null;
+  const W=Math.max(...all.map(n=>n.x))+boxW;
+  const H=Math.max(...all.map(n=>n.y))+boxH;
+  return {all,boxW,boxH,vGap,W,H};
+}
 
-  // group nodes by depth
-  const levels=[];
-  (function collect(nodes){ nodes.forEach(n=>{ (levels[n.depth]=levels[n.depth]||[]).push(n); n.children.length&&collect(n.children); }); })(roots);
+// ── SmartArt-like org chart: individual anchored shapes (text renders everywhere),
+//    boxes + elbow connectors, vertically centred on the page (recomputed per size).
+function buildOrgChartParagraphXml(hrRows){
+  const L=orgLayout(hrRows);
+  if(!L) return '';
+  const EMU_IN=914400, TWIP=635;
+  const pageW=16838*TWIP, pageH=11906*TWIP;
+  const safeTop=1.75*EMU_IN, safeBot=1.2*EMU_IN;
+  const availH=(pageH-safeBot)-safeTop;
+  const targetW=pageW-2*520000;
+  const scale=Math.min(1, targetW/L.W, availH/L.H);
+  const sx=v=>Math.round(v*scale);
+  const chartW=Math.round(L.W*scale), chartH=Math.round(L.H*scale);
+  const xOff=Math.round((pageW-chartW)/2);
+  const yOff=Math.round(safeTop+(availH-chartH)/2);
+  const px=x=>xOff+sx(x), py=y=>yOff+sx(y);
+  const nameSz=Math.max(16,Math.min(26,Math.round(26*scale)));
+  const typeSz=Math.max(12,Math.min(20,Math.round(20*scale)));
+  const F=`<w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/>`;
+  const lineClr='4472C4';
+  let z=8000, runs='';
 
-  const colW=Math.floor(TW/ncols);
-  const widths=Array.from({length:ncols},(_,i)=> i===ncols-1 ? TW-colW*(ncols-1) : colW);
-  const NB={top:{style:BorderStyle.NONE},bottom:{style:BorderStyle.NONE},left:{style:BorderStyle.NONE},right:{style:BorderStyle.NONE}};
-
-  function boxCell(n){
-    const col=orgFill(n.type);
-    const span=n.c1-n.c0+1;
-    return new TableCell({
-      columnSpan:span,
-      shading:{type:ShadingType.CLEAR,fill:col.fill,color:'auto'},
-      borders:{top:BDR(col.line,12),bottom:BDR(col.line,12),left:BDR(col.line,12),right:BDR(col.line,12)},
-      margins:{top:140,bottom:140,left:80,right:80},
-      verticalAlign:VerticalAlign.CENTER,
-      children:[
-        new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{after:30,line:240,lineRule:'auto'},
-          children:[new TextRun({text:n.pos||'',bold:true,size:24,font:FONT,color:'000000'})]}),
-        new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{after:0,line:240,lineRule:'auto'},
-          children:[new TextRun({text:'('+(n.type||'')+')',size:18,font:FONT,color:'000000'})]}),
-      ],
-    });
+  function anchorWrap(x,y,w,h,inner,name){
+    const zi=z++;
+    return `<w:r><w:drawing>`+
+      `<wp:anchor xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="${zi}" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">`+
+      `<wp:simplePos x="0" y="0"/>`+
+      `<wp:positionH relativeFrom="page"><wp:posOffset>${x}</wp:posOffset></wp:positionH>`+
+      `<wp:positionV relativeFrom="page"><wp:posOffset>${y}</wp:posOffset></wp:positionV>`+
+      `<wp:extent cx="${w}" cy="${h}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/>`+
+      `<wp:docPr id="${zi}" name="${name}${zi}"/><wp:cNvGraphicFramePr/>`+
+      `<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">`+
+      `<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">`+
+      `<wps:wsp xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">`+
+      `<wps:cNvPr id="${zi}" name="${name}${zi}"/>${inner}`+
+      `</wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>`;
   }
-  function spacerCell(span){
-    return new TableCell({columnSpan:Math.max(span,1),borders:NB,
-      children:[new Paragraph({spacing:{after:0},children:[]})]});
+  function lineAnchor(x1,y1,x2,y2){
+    const x=Math.min(x1,x2), y=Math.min(y1,y2), w=Math.max(Math.abs(x2-x1),1), h=Math.max(Math.abs(y2-y1),1);
+    return anchorWrap(x,y,w,h,
+      `<wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${w}" cy="${h}"/></a:xfrm>`+
+      `<a:prstGeom prst="line"><a:avLst/></a:prstGeom>`+
+      `<a:ln w="12700"><a:solidFill><a:srgbClr val="${lineClr}"/></a:solidFill></a:ln></wps:spPr>`+
+      `<wps:bodyPr/>`, 'ln');
   }
-  function gapRow(){
-    return new TableRow({children:[new TableCell({columnSpan:ncols,borders:NB,
-      children:[new Paragraph({spacing:{before:0,after:0},
-        children:[new TextRun({text:'',size:10,font:FONT})]})]})]});
+  function boxAnchor(n){
+    const c=orgFill(n.type), w=sx(L.boxW), h=sx(L.boxH);
+    const txt=`<wps:txbx><w:txbxContent>`+
+      `<w:p><w:pPr><w:bidi/><w:spacing w:after="0" w:line="240" w:lineRule="auto"/><w:jc w:val="center"/></w:pPr>`+
+        `<w:r><w:rPr>${F}<w:b/><w:bCs/><w:sz w:val="${nameSz}"/><w:szCs w:val="${nameSz}"/><w:color w:val="000000"/></w:rPr><w:t xml:space="preserve">${escXml(n.pos)}</w:t></w:r></w:p>`+
+      `<w:p><w:pPr><w:bidi/><w:spacing w:after="0" w:line="240" w:lineRule="auto"/><w:jc w:val="center"/></w:pPr>`+
+        `<w:r><w:rPr>${F}<w:sz w:val="${typeSz}"/><w:szCs w:val="${typeSz}"/><w:color w:val="000000"/></w:rPr><w:t xml:space="preserve">(${escXml(n.type)})</w:t></w:r></w:p>`+
+      `</w:txbxContent></wps:txbx>`;
+    return anchorWrap(px(n.x),py(n.y),w,h,
+      `<wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${w}" cy="${h}"/></a:xfrm>`+
+      `<a:prstGeom prst="roundRect"><a:avLst/></a:prstGeom>`+
+      `<a:solidFill><a:srgbClr val="${c.fill}"/></a:solidFill>`+
+      `<a:ln w="12700"><a:solidFill><a:srgbClr val="${c.line}"/></a:solidFill></a:ln></wps:spPr>`+
+      txt+
+      `<wps:bodyPr rot="0" wrap="square" lIns="18000" tIns="9000" rIns="18000" bIns="9000" anchor="ctr" anchorCtr="0"><a:noAutofit/></wps:bodyPr>`, 'box');
   }
 
-  const rows=[];
-  levels.forEach((lvl,di)=>{
-    if(di>0) rows.push(gapRow());
-    const nodes=lvl.slice().sort((a,b)=>a.c0-b.c0);
-    const cells=[]; let cursor=0;
-    nodes.forEach(n=>{
-      if(n.c0>cursor) cells.push(spacerCell(n.c0-cursor));
-      cells.push(boxCell(n));
-      cursor=n.c1+1;
-    });
-    if(cursor<ncols) cells.push(spacerCell(ncols-cursor));
-    rows.push(new TableRow({children:cells}));
+  // connectors first (lower z), then boxes (higher z, drawn on top)
+  L.all.forEach(n=>{
+    if(!n.children.length) return;
+    const pcx=px(n.x+L.boxW/2), pbot=py(n.y+L.boxH), busY=py(n.y+L.boxH+L.vGap/2);
+    runs+=lineAnchor(pcx,pbot,pcx,busY);
+    const cxs=n.children.map(c=>px(c.x+L.boxW/2));
+    runs+=lineAnchor(Math.min(pcx,...cxs),busY,Math.max(pcx,...cxs),busY);
+    n.children.forEach(c=>{const ccx=px(c.x+L.boxW/2); runs+=lineAnchor(ccx,busY,ccx,py(c.y));});
   });
+  L.all.forEach(n=>{ runs+=boxAnchor(n); });
 
-  return new Table({width:{size:TW,type:WidthType.DXA},columnWidths:widths,
-                    bidirectional:true,visuallyRightToLeft:true,
-                    borders:{top:{style:BorderStyle.NONE},bottom:{style:BorderStyle.NONE},
-                             left:{style:BorderStyle.NONE},right:{style:BorderStyle.NONE},
-                             insideHorizontal:{style:BorderStyle.NONE},insideVertical:{style:BorderStyle.NONE}},
-                    rows});
+  return `<w:p><w:pPr><w:spacing w:after="0"/></w:pPr>${runs}</w:p>`;
+}
+
+// replace the [[ORGCHART]] marker paragraph with the anchored-shapes paragraph
+async function injectOrgChart(buffer, hrRows){
+  const {persons}=buildPersons(hrRows);
+  if(!persons.length) return buffer;
+  const para=buildOrgChartParagraphXml(hrRows);
+  if(!para) return buffer;
+  const zip=await JSZip.loadAsync(buffer);
+  let xml=await zip.file('word/document.xml').async('string');
+  xml=xml.replace(/<w:p\b[^>]*>(?:(?!<\/w:p>).)*?\[\[ORGCHART\]\](?:(?!<\/w:p>).)*?<\/w:p>/s, para);
+  zip.file('word/document.xml', xml);
+  return zip.generateAsync({type:'nodebuffer', compression:'DEFLATE'});
 }
 
 function escXml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
