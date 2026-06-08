@@ -417,9 +417,9 @@
                 <th>الصنف</th>
                 <th>البيان</th>
                 <th>الاهتلاك</th>
+                <th>العدد</th>
                 <th>ملاحظات</th>
                 <th>التكلفة للواحدة ($)</th>
-                <th>العدد</th>
                 <th>التكلفة الإجمالية ($)</th>
                 <th></th>
               </tr>
@@ -522,10 +522,9 @@
                 <th>#</th>
                 <th>المنصب</th>
                 <th>النوع</th>
+                <th>العدد</th>
                 <th>تابع لـ</th>
                 <th>الراتب الشهري الفردي ($)</th>
-                <th>عدد أشهر الدوام في السنة</th>
-                <th>العدد</th>
                 <th>الراتب الشهري الإجمالي ($)</th>
                 <th></th>
               </tr>
@@ -533,7 +532,7 @@
             <tbody id="hrBody"></tbody>
             <tfoot>
               <tr class="total-row">
-                <td colspan="7" style="text-align:right;padding-right:12px">الإجمالي (سنوياً)</td>
+                <td colspan="6" style="text-align:right;padding-right:12px">الإجمالي</td>
                 <td><input type="text" class="computed" id="hrTotal" readonly value="$0"></td>
                 <td></td>
               </tr>
@@ -569,9 +568,9 @@
                 <th>#</th>
                 <th>الصنف</th>
                 <th>البيان</th>
+                <th>العدد</th>
                 <th>ملاحظات</th>
                 <th>التكلفة الشهرية للواحدة ($)</th>
-                <th>العدد</th>
                 <th>التكلفة الشهرية الإجمالية ($)</th>
                 <th></th>
               </tr>
@@ -579,7 +578,7 @@
             <tbody id="fixedBody"></tbody>
             <tfoot>
               <tr class="total-row">
-                <td colspan="6" style="text-align:right;padding-right:12px">الإجمالي (سنوياً)</td>
+                <td colspan="6" style="text-align:right;padding-right:12px">الإجمالي (شهري)</td>
                 <td><input type="text" class="computed" id="fixedTotal" readonly value="$0"></td>
                 <td></td>
               </tr>
@@ -612,9 +611,9 @@
                 <th>الصنف</th>
                 <th>البيان</th>
                 <th>نسبة الاهتلاك (%)</th>
+                <th>العدد</th>
                 <th>ملاحظات</th>
                 <th>قيمة الاهتلاك للواحدة ($)</th>
-                <th>العدد</th>
                 <th>قيمة الاهتلاك الإجمالية ($)</th>
               </tr>
             </thead>
@@ -644,6 +643,7 @@
     <div class="check-icon">✅</div>
     <h2>تم إرسال النموذج بنجاح!</h2>
     <p>تم حفظ بيانات دراسة المشروع بنجاح. شكراً لك.</p>
+    <p id="dlStatus" style="color:var(--primary-light);font-weight:600;margin-top:12px"></p>
     <button class="btn btn-primary" style="margin:20px auto 0;display:inline-flex" onclick="location.reload()">➕ إضافة مشروع جديد</button>
   </div>
 </div>
@@ -735,8 +735,8 @@ function updateSummary() {
   const ops = calcOpsAnnual();
   document.getElementById('sum_operational').textContent = fmtMoney(ops);
 
-  // fixed annual (salary row already annual + other rows × 12)
-  const fx = calcFixedAnnualTotal();
+  // fixed annual = monthly * 12
+  const fx = calcFixedMonthlyTotal() * 12;
   document.getElementById('sum_fixed').textContent = fmtMoney(fx);
 
   // depreciation
@@ -772,9 +772,9 @@ function addFoundingRow() {
     <td>${buildCatSelect('fcat_'+n, FOUNDING_CATS, extraFoundingCats, 'handleFoundingCat')}</td>
     <td><input type="text" id="fbayan_${n}" placeholder="البيان"></td>
     <td><div class="cb-wrap"><input type="checkbox" id="fdep_${n}" onchange="syncDepTable()"><label for="fdep_${n}">✓</label></div></td>
+    <td><input type="number" id="fqty_${n}" min="0" value="1" oninput="calcFoundingRow(${n})"></td>
     <td><input type="text" id="fnotes_${n}" placeholder="ملاحظات"></td>
     <td class="money-wrap" style="position:relative"><input type="number" id="fprice_${n}" min="0" value="0" oninput="calcFoundingRow(${n})"></td>
-    <td><input type="number" id="fqty_${n}" min="0" value="1" oninput="calcFoundingRow(${n})"></td>
     <td><input type="text" class="computed" id="ftotal_${n}" readonly value="$0"></td>
     <td><button type="button" class="del-btn" onclick="delFoundingRow(${n})">🗑</button></td>
   `;
@@ -1055,39 +1055,24 @@ function calcOpsAnnual() {
 
 // ─── FIXED COSTS ─────────────────────────────────────────
 let fixedRowCount = 0;
-function addFixedRow(opts={}) {
+function addFixedRow() {
   fixedRowCount++;
   const n = fixedRowCount;
-  const locked = !!opts.locked;
   const tbody = document.getElementById('fixedBody');
   const tr = document.createElement('tr');
   tr.id = `fxr_${n}`;
-  if (locked) {
-    tr.dataset.salary = '1';
-    tr.innerHTML = `
-      <td>${n}</td>
-      <td><input type="text" id="fxcat_${n}" value="رواتب" readonly style="background:#f1f5f9;cursor:not-allowed"></td>
-      <td><input type="text" id="fxbayan_${n}" value="رواتب الموظفين (كامل الهيكلية)" readonly style="background:#f1f5f9;cursor:not-allowed"></td>
-      <td><input type="text" id="fxnotes_${n}" value="يُحسب تلقائياً من جدول الموارد البشرية" readonly style="background:#f1f5f9;cursor:not-allowed"></td>
-      <td><input type="number" id="fxprice_${n}" value="0" readonly style="background:#f1f5f9;cursor:not-allowed"></td>
-      <td><input type="number" id="fxqty_${n}" value="12" readonly style="background:#f1f5f9;cursor:not-allowed"></td>
-      <td><input type="text" class="computed" id="fxtotal_${n}" readonly value="$0"></td>
-      <td><span title="سطر تلقائي غير قابل للحذف">🔒</span></td>
-    `;
-  } else {
-    const cats = [...FIXED_CATS, ...extraFixedCats];
-    const opts2 = cats.map(c=>`<option>${c}</option>`).join('') + `<option value="__other__">أخرى (إضافة جديد)</option>`;
-    tr.innerHTML = `
-      <td>${n}</td>
-      <td><select id="fxcat_${n}" onchange="handleFixedCat(this,${n})">${opts2}</select></td>
-      <td><input type="text" id="fxbayan_${n}" placeholder="البيان"></td>
-      <td><input type="text" id="fxnotes_${n}" placeholder="ملاحظات"></td>
-      <td><input type="number" id="fxprice_${n}" min="0" value="0" oninput="calcFixedRow(${n})"></td>
-      <td><input type="number" id="fxqty_${n}" min="0" value="1" oninput="calcFixedRow(${n})"></td>
-      <td><input type="text" class="computed" id="fxtotal_${n}" readonly value="$0"></td>
-      <td><button type="button" class="del-btn" onclick="delFixedRow(${n})">🗑</button></td>
-    `;
-  }
+  const cats = [...FIXED_CATS, ...extraFixedCats];
+  const opts = cats.map(c=>`<option>${c}</option>`).join('') + `<option value="__other__">أخرى (إضافة جديد)</option>`;
+  tr.innerHTML = `
+    <td>${n}</td>
+    <td><select id="fxcat_${n}" onchange="handleFixedCat(this,${n})">${opts}</select></td>
+    <td><input type="text" id="fxbayan_${n}" placeholder="البيان"></td>
+    <td><input type="number" id="fxqty_${n}" min="0" value="1" oninput="calcFixedRow(${n})"></td>
+    <td><input type="text" id="fxnotes_${n}" placeholder="ملاحظات"></td>
+    <td><input type="number" id="fxprice_${n}" min="0" value="0" oninput="calcFixedRow(${n})"></td>
+    <td><input type="text" class="computed" id="fxtotal_${n}" readonly value="$0"></td>
+    <td><button type="button" class="del-btn" onclick="delFixedRow(${n})">🗑</button></td>
+  `;
   tbody.appendChild(tr);
 }
 
@@ -1107,28 +1092,15 @@ function calcFixedRow(n) {
   updateSummary();
 }
 
-// footer total — now shows the true ANNUAL fixed cost
 function calcFixedMonthlyTotal() {
-  const annual = calcFixedAnnualTotal();
-  document.getElementById('fixedTotal').value = fmtMoney(annual);
-  return annual;
-}
-
-// true ANNUAL fixed cost: salary row (already annual) + other rows × 12
-function calcFixedAnnualTotal() {
-  let annual = 0;
-  document.querySelectorAll('#fixedBody tr[id^="fxr_"]').forEach(tr => {
-    const n = tr.id.replace('fxr_','');
-    const tot = parseMoney(document.getElementById('fxtotal_'+n)?.value || 0);
-    annual += tr.dataset.salary === '1' ? tot : tot * 12;
-  });
-  return annual;
+  let total = 0;
+  document.querySelectorAll('[id^="fxtotal_"]').forEach(el => { total += parseMoney(el.value); });
+  document.getElementById('fixedTotal').value = fmtMoney(total);
+  return total;
 }
 
 function delFixedRow(n) {
-  const tr = document.getElementById('fxr_'+n);
-  if (tr && tr.dataset.salary === '1') return; // salary row is locked
-  tr?.remove();
+  document.getElementById('fxr_'+n)?.remove();
   calcFixedMonthlyTotal();
   updateSummary();
 }
@@ -1153,9 +1125,9 @@ function syncDepTable() {
       <td>${cat}</td>
       <td>${bayan}</td>
       <td class="pct-wrap" style="position:relative"><input type="number" id="dpct_${n}" min="0" max="100" value="0" oninput="calcDepRow('${n}',${price},${qty})"></td>
+      <td>${qty}</td>
       <td>${notes}</td>
       <td><input type="text" class="computed" id="dpu_${n}" readonly value="$0"></td>
-      <td>${qty}</td>
       <td><input type="text" class="computed" id="dpt_${n}" readonly value="$0"></td>
     `;
     tbody.appendChild(tr);
@@ -1192,21 +1164,18 @@ function addHRRow() {
   const tr = document.createElement('tr');
   tr.id = `hrr_${n}`;
 
-  const posOpts = `<option value="" selected>— اختر —</option>` + [...HR_POSITIONS,...extraHRPositions].map(p=>`<option>${p}</option>`).join('') + `<option value="__other__">أخرى</option>`;
-  const typeOpts = `<option value="" selected>— اختر —</option>` + [...HR_TYPES,...extraHRTypes].map(t=>`<option>${t}</option>`).join('') + `<option value="__other__">أخرى</option>`;
+  const posOpts = [...HR_POSITIONS,...extraHRPositions].map(p=>`<option>${p}</option>`).join('') + `<option value="__other__">أخرى</option>`;
+  const typeOpts = [...HR_TYPES,...extraHRTypes].map(t=>`<option>${t}</option>`).join('') + `<option value="__other__">أخرى</option>`;
   const reportsTo = getHRPositions();
   const reportsOpts = `<option value="">—</option>` + reportsTo.map(p=>`<option>${p}</option>`).join('');
-  let monthsOpts = '';
-  for (let mo=12; mo>=1; mo--) monthsOpts += `<option value="${mo}" ${mo===12?'selected':''}>${mo}</option>`;
 
   tr.innerHTML = `
     <td>${n}</td>
     <td><select id="hrpos_${n}" onchange="handleHRPos(this,${n})">${posOpts}</select></td>
     <td><select id="hrtype_${n}" onchange="handleHRType(this,${n})">${typeOpts}</select></td>
+    <td><input type="number" id="hrqty_${n}" min="0" value="1" oninput="calcHRRow(${n})"></td>
     <td><select id="hrreports_${n}">${reportsOpts}</select></td>
     <td><input type="number" id="hrsalary_${n}" min="0" value="0" oninput="calcHRRow(${n})"></td>
-    <td><select id="hrmonths_${n}" onchange="calcHRRow(${n})">${monthsOpts}</select></td>
-    <td><input type="number" id="hrqty_${n}" min="0" value="1" oninput="calcHRRow(${n})"></td>
     <td><input type="text" class="computed" id="hrtotal_${n}" readonly value="$0"></td>
     <td><button type="button" class="del-btn" onclick="delHRRow(${n})">🗑</button></td>
   `;
@@ -1239,41 +1208,40 @@ function calcHRRow(n) {
   const qty = parseFloat(document.getElementById('hrqty_'+n)?.value) || 0;
   const sal = parseFloat(document.getElementById('hrsalary_'+n)?.value) || 0;
   const el = document.getElementById('hrtotal_'+n);
-  if(el) el.value = fmtMoney(qty * sal);   // monthly total for the group (qty × individual salary)
+  if(el) el.value = fmtMoney(qty * sal);
   calcHRTotal();
   updateSummary();
   buildOrgChart();
 }
 
-// footer = ANNUAL structure cost = Σ (individual salary × employees × work-months/year)
 function calcHRTotal() {
-  let annual = 0;
-  document.querySelectorAll('#hrBody tr[id^="hrr_"]').forEach(tr => {
-    const n = tr.id.replace('hrr_','');
-    const qty = parseFloat(document.getElementById('hrqty_'+n)?.value) || 0;
-    const sal = parseFloat(document.getElementById('hrsalary_'+n)?.value) || 0;
-    const months = parseFloat(document.getElementById('hrmonths_'+n)?.value) || 12;
-    annual += qty * sal * months;
-  });
-  document.getElementById('hrTotal').value = fmtMoney(annual);
+  let total = 0;
+  document.querySelectorAll('[id^="hrtotal_"]').forEach(el => { total += parseMoney(el.value); });
+  document.getElementById('hrTotal').value = fmtMoney(total);
   syncSalaryToFixed();
-  return annual;
 }
 
 function syncSalaryToFixed() {
-  const hrAnnual = parseMoney(document.getElementById('hrTotal')?.value || 0);
-  const salaryRow = document.querySelector('#fixedBody tr[data-salary="1"]');
-  if (!salaryRow) return;
-  const n = salaryRow.id.replace('fxr_','');
-  const priceEl = document.getElementById('fxprice_'+n);
-  const qtyEl   = document.getElementById('fxqty_'+n);
-  const totEl   = document.getElementById('fxtotal_'+n);
-  const monthly = hrAnnual / 12;
-  if (priceEl) priceEl.value = Math.round(monthly * 100) / 100;
-  if (qtyEl)   qtyEl.value = 12;
-  if (totEl)   totEl.value = fmtMoney(hrAnnual);   // 12 × (annual/12) = annual
-  calcFixedMonthlyTotal();
-  updateSummary();
+  const hrTotalVal = parseMoney(document.getElementById('hrTotal')?.value || 0);
+  // Update first fixed row (salary row)
+  const firstFixed = document.querySelector('#fixedBody tr[id^="fxr_"]');
+  if (firstFixed) {
+    const n = firstFixed.id.replace('fxr_','');
+    const priceEl = document.getElementById('fxprice_'+n);
+    const bayEl = document.getElementById('fxbayan_'+n);
+    const catEl = document.getElementById('fxcat_'+n);
+    if (priceEl) {
+      priceEl.value = hrTotalVal;
+      if (bayEl && !bayEl.value) bayEl.value = 'الموظفين';
+      if (catEl) {
+        // set to رواتب if it exists as option
+        for (let opt of catEl.options) {
+          if (opt.value === 'رواتب' || opt.text === 'رواتب') { catEl.value = opt.value; break; }
+        }
+      }
+      calcFixedRow(n);
+    }
+  }
 }
 
 function calcTotalEmployees() {
@@ -1365,24 +1333,9 @@ function buildOrgChart() {
 }
 
 // ─── SUBMIT ───────────────────────────────────────────────
-async function downloadWord(id) {
-  try {
-    const r = await fetch('/api/download/' + id + '/word');
-    if (!r.ok) return;
-    const blob = await r.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'دراسة_مشروع_' + id + '.docx';
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
-  } catch(e) { /* ignore download errors */ }
-}
-
 async function submitForm() {
   const data = collectFormData();
-  const btn = document.getElementById('submitBtn');
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ جاري الإرسال...'; }
+  const submitBtn = document.getElementById('submitBtn');
   try {
     const resp = await fetch('/api/submit', {
       method: 'POST',
@@ -1391,16 +1344,48 @@ async function submitForm() {
     });
     const result = await resp.json();
     if(result.success) {
-      await downloadWord(result.id);
       document.getElementById('mainForm').style.display = 'none';
       document.getElementById('successMsg').style.display = 'block';
+
+      // تحميل ملف Word تلقائياً — ننتظر توليده في الخلفية ثم ننزّله
+      const id = result.id;
+      const statusEl = document.getElementById('dlStatus');
+      if (statusEl) statusEl.textContent = '⏳ جاري تجهيز ملف Word للتحميل...';
+
+      // ننتظر حتى يصبح الملف جاهزاً (محاولات متعددة)
+      let attempts = 0;
+      const tryDownload = async () => {
+        attempts++;
+        try {
+          const head = await fetch(`/api/download/${id}/word`, { method: 'GET' });
+          if (head.ok) {
+            const blob = await head.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            // اسم الملف يأتي من الخادم عبر Content-Disposition، لكن نضع احتياطياً
+            a.download = '';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            if (statusEl) statusEl.textContent = '✅ تم تحميل ملف Word';
+            return;
+          }
+        } catch(e) {}
+        if (attempts < 30) {
+          setTimeout(tryDownload, 1500);  // أعد المحاولة كل 1.5 ثانية
+        } else {
+          if (statusEl) statusEl.innerHTML = 'تعذّر التحميل التلقائي. <a href="/admin.html" style="color:var(--primary-light)">افتح صفحة الإدارة للتحميل</a>';
+        }
+      };
+      setTimeout(tryDownload, 1000);  // ابدأ بعد ثانية لإتاحة وقت لبدء التوليد
+
     } else {
       alert('حدث خطأ أثناء الإرسال: ' + (result.message || 'خطأ غير معروف'));
-      if (btn) { btn.disabled = false; btn.textContent = '✅ إرسال النموذج'; }
     }
   } catch(e) {
     alert('تعذّر الاتصال بالخادم. تأكد من تشغيل الـ backend.');
-    if (btn) { btn.disabled = false; btn.textContent = '✅ إرسال النموذج'; }
   }
 }
 
@@ -1458,7 +1443,6 @@ function collectFormData() {
       position: document.getElementById('hrpos_'+n)?.value,
       type: document.getElementById('hrtype_'+n)?.value,
       qty: document.getElementById('hrqty_'+n)?.value,
-      months: document.getElementById('hrmonths_'+n)?.value || '12',
       reports: document.getElementById('hrreports_'+n)?.value,
       salary: document.getElementById('hrsalary_'+n)?.value,
       total: document.getElementById('hrtotal_'+n)?.value
@@ -1526,9 +1510,7 @@ buildProgress();
 // Add initial rows
 addFoundingRow(); addFoundingRow(); addFoundingRow();
 addHRRow();
-addFixedRow({locked:true});   // salary row (auto-filled from HR, locked)
-addFixedRow();
-syncSalaryToFixed();
+addFixedRow(); addFixedRow();
 
 // ─── EDIT MODE: load saved submission ─────────────────────
 (function checkEditMode() {
@@ -1562,7 +1544,6 @@ syncSalaryToFixed();
       });
       const result = await resp.json();
       if (result.success) {
-        await downloadWord(editId);
         document.getElementById('mainForm').style.display = 'none';
         document.getElementById('successMsg').style.display = 'block';
         document.getElementById('successMsg').querySelector('h2').textContent = '✅ تم تحديث النموذج بنجاح!';
@@ -1621,19 +1602,15 @@ syncSalaryToFixed();
       const posEl=document.getElementById('hrpos_'+n); if(posEl) posEl.value=r.position||'';
       const typEl=document.getElementById('hrtype_'+n); if(typEl) typEl.value=r.type||'';
       const qEl=document.getElementById('hrqty_'+n); if(qEl) qEl.value=r.qty||'1';
-      const moEl=document.getElementById('hrmonths_'+n); if(moEl) moEl.value=r.months||'12';
       const rEl=document.getElementById('hrreports_'+n); if(rEl) rEl.value=r.reports||'';
       const sEl=document.getElementById('hrsalary_'+n); if(sEl) sEl.value=r.salary||'0';
       calcHRRow(n);
     });
 
-    // Fill fixed rows (recreate locked salary row, then the user rows)
+    // Fill fixed rows
     document.querySelectorAll('[id^="fxr_"]').forEach(r=>r.remove());
     fixedRowCount = 0;
-    addFixedRow({locked:true});
     (d.fixedRows||[]).forEach(r => {
-      const isSalary = (r.cat==='رواتب') && (String(r.bayan||'').indexOf('الموظفين')>=0 || String(r.notes||'').indexOf('تلقائي')>=0);
-      if (isSalary) return; // handled by the locked salary row
       addFixedRow();
       const n=fixedRowCount;
       const catEl=document.getElementById('fxcat_'+n); if(catEl) catEl.value=r.cat||'';
@@ -1643,7 +1620,6 @@ syncSalaryToFixed();
       const pEl=document.getElementById('fxprice_'+n); if(pEl) pEl.value=r.price||'0';
       calcFixedRow(n);
     });
-    syncSalaryToFixed();
 
     updateSummary();
     console.log('✅ Edit data loaded for:', editId);

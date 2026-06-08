@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "postinstall": "pip3 install python-docx lxml --break-system-packages -q || pip install python-docx lxml -q"
   },
   "dependencies": {
     "cors": "^2.8.5",

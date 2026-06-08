@@ -17,18 +17,8 @@ const {
   Document, Packer, Paragraph, TextRun,
   Table, TableRow, TableCell,
   AlignmentType, WidthType, ShadingType,
-  BorderStyle, VerticalAlign, PageOrientation,
-  Header, ImageRun, PageBreak,
-  HorizontalPositionRelativeFrom, VerticalPositionRelativeFrom,
-  HorizontalPositionAlign
+  BorderStyle, VerticalAlign, PageOrientation
 } = require('docx');
-
-// ── Assets (letterhead image + SmartArt diagram templates) ───
-const ASSETS_DIR = path.join(__dirname, 'assets');
-function readAsset(rel) {
-  try { return fs.readFileSync(path.join(ASSETS_DIR, rel)); } catch { return null; }
-}
-const LETTERHEAD_PNG = readAsset('letterhead.png');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -141,11 +131,11 @@ async function generateExcel(data) {
   if (data.foundingRows?.length) {
     const s1 = wb.addWorksheet('التكاليف التأسيسية', { rightToLeft:true });
     s1.columns = [
-      {width:6},{width:16},{width:24},{width:10},{width:20},{width:20},{width:8},{width:20}
+      {width:6},{width:16},{width:24},{width:10},{width:8},{width:20},{width:20},{width:20}
     ];
     const hr = s1.getRow(1);
     hr.height = 24;
-    ['#','الصنف','البيان','اهتلاك','ملاحظات','التكلفة للواحدة ($)','العدد','التكلفة الإجمالية ($)']
+    ['#','الصنف','البيان','اهتلاك','العدد','ملاحظات','التكلفة للواحدة ($)','التكلفة الإجمالية ($)']
       .forEach((h,i) => { hr.getCell(i+1).value=h; Object.assign(hr.getCell(i+1), hStyle(C_HEADER)); });
 
     let tot = 0;
@@ -154,11 +144,11 @@ async function generateExcel(data) {
       tot += v;
       const row = s1.getRow(i+2);
       row.height = 20;
-      [r ? i+1 : '', r.cat, r.bayan, r.dep?'✓':'', r.notes, parseFloat(r.price)||0, r.qty, v]
+      [r ? i+1 : '', r.cat, r.bayan, r.dep?'✓':'', r.qty, r.notes, parseFloat(r.price)||0, v]
         .forEach((val,c) => {
           row.getCell(c+1).value = val;
           Object.assign(row.getCell(c+1), dStyle());
-          if(c===5||c===7) row.getCell(c+1).numFmt='"$"#,##0.00';
+          if(c===6||c===7) row.getCell(c+1).numFmt='"$"#,##0.00';
         });
     });
     const n = data.foundingRows.length;
@@ -208,65 +198,62 @@ async function generateExcel(data) {
   // ── Sheet 4: التكاليف الثابتة ─────────────────────────
   if (data.fixedRows?.length) {
     const s4 = wb.addWorksheet('التكاليف الثابتة', { rightToLeft:true });
-    s4.columns = [{width:6},{width:16},{width:24},{width:20},{width:22},{width:8},{width:22}];
+    s4.columns = [{width:6},{width:16},{width:24},{width:8},{width:20},{width:22},{width:22}];
     const hr = s4.getRow(1); hr.height=24;
-    ['#','الصنف','البيان','ملاحظات','التكلفة الشهرية للواحدة ($)','العدد','التكلفة الشهرية الإجمالية ($)']
+    ['#','الصنف','البيان','العدد','ملاحظات','التكلفة الشهرية للواحدة ($)','التكلفة الشهرية الإجمالية ($)']
       .forEach((h,i) => { hr.getCell(i+1).value=h; Object.assign(hr.getCell(i+1), hStyle(C_HEADER)); });
 
-    const isSalaryRow=(r)=>(r.cat==='رواتب') && (String(r.bayan||'').includes('الموظفين') || String(r.notes||'').includes('تلقائي'));
     let tot=0;
     data.fixedRows.forEach((r,i) => {
       const v = parseFloat(String(r.total||'0').replace(/[^0-9.]/g,''))||0;
-      tot += isSalaryRow(r) ? v : v*12;
+      tot+=v;
       const row = s4.getRow(i+2); row.height=20;
-      [i+1, r.cat, r.bayan, r.notes, parseFloat(r.price)||0, r.qty, v]
+      [i+1, r.cat, r.bayan, r.qty, r.notes, parseFloat(r.price)||0, v]
         .forEach((val,c) => {
           row.getCell(c+1).value=val; Object.assign(row.getCell(c+1),dStyle());
-          if(c===4||c===6) row.getCell(c+1).numFmt='"$"#,##0.00';
+          if(c===5||c===6) row.getCell(c+1).numFmt='"$"#,##0.00';
         });
     });
     const n = data.fixedRows.length;
     s4.mergeCells(`A${n+2}:F${n+2}`);
-    s4.getCell(`A${n+2}`).value='الإجمالي (سنوياً)'; Object.assign(s4.getCell(`A${n+2}`),tStyle(C_TOTAL));
+    s4.getCell(`A${n+2}`).value='الإجمالي الشهري'; Object.assign(s4.getCell(`A${n+2}`),tStyle(C_TOTAL));
     s4.getCell(`G${n+2}`).value=tot; s4.getCell(`G${n+2}`).numFmt='"$"#,##0.00'; Object.assign(s4.getCell(`G${n+2}`),tStyle(C_TOTAL));
   }
 
   // ── Sheet 5: الموارد البشرية ──────────────────────────
   if (data.hrRows?.length) {
     const s5 = wb.addWorksheet('الموارد البشرية', { rightToLeft:true });
-    s5.columns = [{width:6},{width:20},{width:16},{width:20},{width:20},{width:14},{width:8},{width:22}];
+    s5.columns = [{width:6},{width:20},{width:16},{width:8},{width:20},{width:22},{width:22}];
     const hr = s5.getRow(1); hr.height=24;
-    ['#','المنصب','النوع','تابع لـ','الراتب الشهري الفردي ($)','عدد أشهر الدوام في السنة','العدد','الراتب الشهري الإجمالي ($)']
+    ['#','المنصب','النوع','العدد','تابع لـ','الراتب الشهري الفردي ($)','الراتب الشهري الإجمالي ($)']
       .forEach((h,i) => { hr.getCell(i+1).value=h; Object.assign(hr.getCell(i+1), hStyle(C_HEADER)); });
 
     let tot=0;
     data.hrRows.forEach((r,i) => {
       const v = parseFloat(String(r.total||'0').replace(/[^0-9.]/g,''))||0;
-      const q=parseFloat(r.qty)||0;
-      const s=parseFloat(String(r.salary||'0').replace(/[^0-9.-]/g,''))||0;
-      const mo=parseFloat(r.months)||12;
-      tot += q*s*mo;
+      tot+=v;
       const row = s5.getRow(i+2); row.height=20;
-      [i+1, r.position, r.type, r.reports, parseFloat(r.salary)||0, mo, r.qty, v]
+      [i+1, r.position, r.type, r.qty, r.reports, parseFloat(r.salary)||0, v]
         .forEach((val,c) => {
           row.getCell(c+1).value=val; Object.assign(row.getCell(c+1),dStyle());
-          if(c===4||c===7) row.getCell(c+1).numFmt='"$"#,##0.00';
+          if(c===5||c===6) row.getCell(c+1).numFmt='"$"#,##0.00';
         });
     });
     const n = data.hrRows.length;
-    s5.mergeCells(`A${n+2}:G${n+2}`);
-    s5.getCell(`A${n+2}`).value='إجمالي الرواتب (سنوياً)'; Object.assign(s5.getCell(`A${n+2}`),tStyle(C_TOTAL));
-    s5.getCell(`H${n+2}`).value=tot; s5.getCell(`H${n+2}`).numFmt='"$"#,##0.00'; Object.assign(s5.getCell(`H${n+2}`),tStyle(C_TOTAL));
+    s5.mergeCells(`A${n+2}:F${n+2}`);
+    s5.getCell(`A${n+2}`).value='إجمالي الرواتب'; Object.assign(s5.getCell(`A${n+2}`),tStyle(C_TOTAL));
+    s5.getCell(`G${n+2}`).value=tot; s5.getCell(`G${n+2}`).numFmt='"$"#,##0.00'; Object.assign(s5.getCell(`G${n+2}`),tStyle(C_TOTAL));
   }
 
   return wb.xlsx.writeBuffer();
 }
 
 // ════════════════════════════════════════════════════════════
+//  WORD GENERATOR  (v6 — all fixes)
 // ════════════════════════════════════════════════════════════
-//  WORD GENERATOR  (v7 — matches "الملف المطلوب.docx" exactly)
-//  Sakkal Majalla · full-width RTL tables · letterhead header
-//  · real Organisation-Chart SmartArt coloured by employee type
+
+// ════════════════════════════════════════════════════════════
+//  WORD GENERATOR  (v6 — all fixes applied)
 // ════════════════════════════════════════════════════════════
 
 const C = {
@@ -275,141 +262,119 @@ const C = {
   MON_ODD:'D9E1F2', MON_EVEN:'B4C6E7', MON_ODD2:'FCE4D6', MON_EVEN2:'F8CBAD',
   SUBTOT:'808080', SUM_LBL:'DEEAF6', SUM_VAL:'FBE4D5',
   ROW_ODD:'FBE4D5', ROW_EVEN:'F2F2F2', WHITE:'FFFFFF',
-  NUM_TINT:'FBE4D5',                 // peach tint of the "#" column cells
-  TITLE_BLUE:'2F5496', TITLE_ORANGE:'ED7D31',
-  // org-chart node colours by employee type (theme accents)
-  ORG_ADM:'accent1', ORG_EXE:'accent6', ORG_SVC:'accent2',
+  ORG_ADM:'4472C4', ORG_EXE:'70AD47', ORG_SVC:'ED7D31', ORG_OTH:'5B9BD5',
 };
 
-const PAGE = {
-  size:{ width:11906, height:16838, orientation:PageOrientation.LANDSCAPE },
-  margin:{ top:720, right:720, bottom:720, left:720, header:720, footer:1545 },
-};
-const TW   = 15388;            // table content width (DXA)
+const PAGE_L = { size:{width:11906,height:16838,orientation:PageOrientation.LANDSCAPE}, margin:{top:720,right:720,bottom:720,left:720} };
+const PAGE_P = { size:{width:11906,height:16838}, margin:{top:720,right:720,bottom:720,left:720} };
+const TW = 15398;  // landscape content width DXA
+
 const FONT = 'Sakkal Majalla';
 
-// exact per-table column widths (DXA) extracted from الملف المطلوب
-const COLW = {
-  summary : [7740,7648],
-  founding: [454,857,4206,1165,4677,1529,713,1787],
-  products: [4822,4841,5705],
-  revenue : [2313,1167,940,940,940,940,940,982,982,982,941,1094,1094,1113],
-  ops     : [1332,877,1213,964,986,986,986,987,1036,987,987,1036,990,990,1011],
-  hr      : [459,2791,1800,2600,2100,2300,988,2240],
-  fixed   : [609,1530,3268,4318,2342,902,2419],
-  dep     : [411,857,4164,1397,4638,1486,687,1748],
-};
-
-const BDR = (c='auto',s=4) => ({style:BorderStyle.SINGLE,size:s,color:c});
+const BDR = (c='auto',s=12) => ({style:BorderStyle.SINGLE,size:s,color:c});
 const BORDERS = {top:BDR(),bottom:BDR(),left:BDR(),right:BDR()};
 
 // ── Cell ──────────────────────────────────────────────────────
 function C_(text, o={}) {
-  const {fill,bold=true,sz=28,color,align=AlignmentType.CENTER,w,colSpan,rowSpan,
-         vAlign=VerticalAlign.CENTER,font=FONT} = o;
+  const {fill,bold=true,sz=28,color,align=AlignmentType.CENTER,w,colSpan,rowSpan,vAlign=VerticalAlign.CENTER} = o;
   const tc = {};
-  if (fill) tc.shading = {type:ShadingType.CLEAR, fill, color:'auto'};
-  if (w)    tc.width   = {size:w, type:WidthType.DXA};
+  if (fill) tc.shading = {type:ShadingType.CLEAR,fill,color:fill};
+  if (w)    tc.width   = {size:w,type:WidthType.DXA};
   if (colSpan) tc.columnSpan = colSpan;
   if (rowSpan>1) tc.rowSpan = rowSpan;
   tc.borders = BORDERS;
-  tc.margins = {top:40,bottom:40,left:80,right:80};
+  tc.margins = {top:60,bottom:60,left:80,right:80};
   tc.verticalAlign = vAlign;
+
   const textColor = color || (
-    (fill===C.DARK_BLUE||fill===C.COL_HDR_BLK||fill===C.SUBTOT) ? C.WHITE : '000000'
+    fill===C.DARK_BLUE||fill===C.COL_HDR_BLK||fill===C.SUBTOT||fill===C.GREY_HDR
+      ? C.WHITE : '000000'
   );
+
   return new TableCell({...tc, children:[new Paragraph({
     bidirectional:true, alignment:align, spacing:{after:0,line:240,lineRule:'auto'},
-    children:[new TextRun({text:String(text??''),bold,size:sz,font,color:textColor})],
+    children:[new TextRun({text:String(text??''),bold,size:sz,font:FONT,color:textColor})],
   })]});
 }
 
 // ── Table ─────────────────────────────────────────────────────
 function T_(rows, W) {
-  return new Table({width:{size:TW,type:WidthType.DXA},columnWidths:W,
-                    bidirectional:true,visuallyRightToLeft:true,rows});
+  return new Table({width:{size:TW,type:WidthType.DXA},columnWidths:W,bidirectional:true,visuallyRightToLeft:true,rows});
 }
-// section title row
+
+// ── Section header row ────────────────────────────────────────
 function secHdr(title, cols, fill=C.DARK_BLUE) {
   return new TableRow({tableHeader:true, children:[
     C_(title,{fill,bold:true,sz:32,colSpan:cols,w:TW,align:AlignmentType.CENTER,
-      color:fill===C.GREY_HDR?'000000':C.WHITE})]});
+      color:fill===C.GREY_HDR?'000000':C.WHITE})
+  ]});
 }
-// column header row
-function colHdr(labels, W, fill=C.COL_HDR_BLU) {
+
+// ── Column header row ─────────────────────────────────────────
+function colHdr(labels, W, fill=C.COL_HDR_BLK) {
   return new TableRow({tableHeader:true, children:
     labels.map((h,i)=>C_(h,{fill,bold:true,sz:28,w:W[i],
-      color:fill===C.COL_HDR_BLK?C.WHITE:'000000'}))});
+      color:fill===C.COL_HDR_BLU?'000000':C.WHITE}))
+  });
 }
-// total row (label spans all but last column)
+
+// ── Total row ─────────────────────────────────────────────────
 function totRow(label, value, cols, lastW, fill=C.DARK_BLUE) {
   return new TableRow({children:[
     C_(label,{fill,bold:true,sz:28,colSpan:cols-1,w:TW-lastW,align:AlignmentType.CENTER}),
-    C_(value,{fill,bold:true,sz:28,w:lastW})]});
+    C_(value,{fill,bold:true,sz:28,w:lastW}),
+  ]});
 }
-// vertical spacer paragraph
-function SP(before=200,sz=28) {
-  return new Paragraph({spacing:{before,after:0},
-    children:[new TextRun({text:'',size:sz,font:FONT})]});
+
+function SP(before=200) { return new Paragraph({spacing:{before,after:0},children:[]}); }
+
+function fN(v) {
+  const n = parseFloat(String(v||'0').replace(/[^0-9.-]/g,''));
+  if(!n||isNaN(n)) return '0';
+  return n.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2});
 }
-function PB(){ return new Paragraph({children:[new PageBreak()]}); }
+function fM(v) {
+  const n = parseFloat(String(v||'0').replace(/[^0-9.-]/g,''));
+  if(isNaN(n)) return '0 $';
+  return n.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2})+' $';
+}
 
-function fN(v){const n=parseFloat(String(v||'0').replace(/[^0-9.-]/g,''));
-  if(!n||isNaN(n))return '0';
-  return n.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2});}
-function fM(v){const n=parseFloat(String(v||'0').replace(/[^0-9.-]/g,''));
-  if(isNaN(n))return '0 $';
-  return n.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2})+' $';}
-
-const PAL=[{dark:C.PROD1,mo:C.MON_ODD ,me:C.MON_EVEN },
-           {dark:C.PROD2,mo:C.MON_ODD2,me:C.MON_EVEN2},
-           {dark:C.PROD3,mo:C.MON_ODD ,me:C.MON_EVEN }];
+const PAL = [
+  {dark:C.PROD1,mo:C.MON_ODD, me:C.MON_EVEN},
+  {dark:C.PROD2,mo:C.MON_ODD2,me:C.MON_EVEN2},
+  {dark:C.PROD3,mo:C.MON_ODD, me:C.MON_EVEN},
+];
 function PC(i){return PAL[i%PAL.length];}
-function norm(arr,tw){const s=arr.reduce((a,b)=>a+b,0);
+
+function norm(arr,tw) {
+  const s=arr.reduce((a,b)=>a+b,0);
   const r=arr.map(w=>Math.round(w*tw/s));
-  r[r.length-1]=tw-r.slice(0,-1).reduce((a,b)=>a+b,0);return r;}
-
-// "#" cell (peach) + alternating data-row fill
-function dFill(i){ return i%2===0 ? undefined : C.ROW_EVEN; }
-
-// ── letterhead header (anchored full-page background image) ──
-function buildHeader() {
-  if (!LETTERHEAD_PNG) return undefined;
-  return new Header({children:[ new Paragraph({children:[ new ImageRun({
-    data: LETTERHEAD_PNG,
-    transformation:{ width:1122, height:791 },   // EMU 10690495×7535545 ÷ 9525
-    floating:{
-      horizontalPosition:{ relative:HorizontalPositionRelativeFrom.PAGE, align:HorizontalPositionAlign.LEFT },
-      verticalPosition:{ relative:VerticalPositionRelativeFrom.PARAGRAPH, offset:-449580 },
-      behindDocument:true, allowOverlap:true,
-    },
-  }) ] }) ]});
+  r[r.length-1]=tw-r.slice(0,-1).reduce((a,b)=>a+b,0);
+  return r;
 }
+
 
 // ════════════════════════════════════════════════════════════════
 async function generateWord(data) {
   const pids = Object.keys(data.products||{}).filter(p=>data.products[p]?.name);
-  const ch = [];
-
-  // ── Title (the logo sits in the page header) ─────────────
-  ch.push(
-    SP(0,26),
-    new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{before:1100,after:0},
-      children:[new TextRun({text:'قسم المشاريع التنموية',bold:true,size:34,font:FONT,color:C.TITLE_BLUE})]}),
-    new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{before:60,after:260},
-      children:[new TextRun({text:'نموذج طرح دراسة مشروع',bold:true,size:28,font:FONT,color:C.TITLE_ORANGE})]}),
-  );
-
-  // each table lives in its OWN section, vertically centred on its page
   const sections = [];
-  const mkSec = (children, valign=VerticalAlign.CENTER) =>
-    ({ properties:{ page:PAGE, verticalAlign:valign }, headers:{default:buildHeader()}, children });
-  const page = (...tbls)=>{ sections.push(mkSec(tbls, VerticalAlign.CENTER)); };
+
+  function tableSection(tblObj) {
+    return { properties:{page:PAGE_L}, children:[SP(2000),tblObj,SP()] };
+  }
+
+  // ── Title ────────────────────────────────────────────────
+  sections.push({ properties:{page:PAGE_L}, children:[
+    new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{before:3000,after:120},
+      children:[new TextRun({text:'قسم المشاريع التنموية',bold:true,size:40,font:FONT,color:C.DARK_BLUE})]}),
+    new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{before:0,after:0},
+      children:[new TextRun({text:'نموذج طرح دراسة مشروع',bold:true,size:32,font:FONT})]}),
+  ]});
 
   // ══ 1. SUMMARY ══════════════════════════════════════════
   {
-    const W = norm(COLW.summary,TW);
-    ch.push(T_([
+    const W = norm([7699,7699],TW);
+    sections.push(tableSection(T_([
       new TableRow({children:[C_('ملخص معلومات المشروع',{fill:C.DARK_BLUE,bold:true,sz:32,colSpan:2,w:TW,align:AlignmentType.CENTER,color:C.WHITE})]}),
       ...[
         ['فكرة المشروع',data.projectIdea||''],
@@ -423,50 +388,57 @@ async function generateWord(data) {
         ['الربح الصافي (سنوياً)',data.summary?.netProfit||'$0'],
         ['عدد الموظفين في المشروع',String(data.summary?.employees||'0')],
       ].map(([l,v])=>new TableRow({children:[
-        C_(l,{fill:C.SUM_LBL,bold:true,sz:28,w:W[0],align:AlignmentType.CENTER}),
-        C_(v,{fill:C.SUM_VAL,bold:true,sz:28,w:W[1],align:AlignmentType.CENTER}),
+        C_(l,{fill:C.SUM_LBL,bold:true,sz:28,w:W[0],align:AlignmentType.RIGHT}),
+        C_(v,{fill:C.SUM_VAL,bold:true,sz:28,w:W[1]}),
       ]})),
-    ],W));
+    ],W)));
   }
-  // section 1 = title + summary (top-aligned)
-  sections.push(mkSec(ch, VerticalAlign.TOP));
 
   // ══ 2. FOUNDING ═════════════════════════════════════════
   if (data.foundingRows?.length) {
-    const W = norm(COLW.founding,TW);
+    const W = norm([149,269,1368,380,233,1521,1572,1906],TW);
     let tot=0; data.foundingRows.forEach(r=>{tot+=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0;});
-    page(T_([
+    sections.push(tableSection(T_([
       secHdr('التكاليف التأسيسية',8),
-      colHdr(['#','الصنف','البيان','الاهتلاك','ملاحظات','التكلفة للواحدة','العدد','التكلفة الإجمالية'],W,C.COL_HDR_BLU),
+      colHdr(['#','الصنف','البيان','الاهتلاك','العدد','ملاحظات','التكلفة للواحدة','التكلفة الإجمالية'],W,C.COL_HDR_BLU),
       ...data.foundingRows.map((r,i)=>new TableRow({children:[
-        C_(i+1,         {fill:C.NUM_TINT,sz:28,w:W[0]}),
-        C_(r.cat||'',   {fill:dFill(i),sz:28,w:W[1]}),
-        C_(r.bayan||'', {fill:dFill(i),sz:28,w:W[2]}),
-        C_(r.dep?'a':'r',{fill:dFill(i),sz:28,w:W[3],font:'Marlett',color:'000000'}),
-        C_(r.notes||'', {fill:dFill(i),sz:28,w:W[4]}),
-        C_(fM(r.price), {fill:dFill(i),sz:28,w:W[5]}),
-        C_(r.qty||'',   {fill:dFill(i),sz:28,w:W[6]}),
-        C_(fM(r.total), {fill:dFill(i),sz:28,w:W[7]}),
+        C_(i+1,         {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[0]}),
+        C_(r.cat||'',   {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[1]}),
+        C_(r.bayan||'', {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[2]}),
+        C_(r.dep?'✓':'',{fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[3],color:r.dep?'70AD47':'000000'}),
+        C_(r.qty||'',   {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[4]}),
+        C_(r.notes||'', {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[5]}),
+        C_(fM(r.price), {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[6]}),
+        C_(fM(r.total), {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[7]}),
       ]})),
+      // Fix 3: "الإجمالي" centered in last row
       totRow('الإجمالي',fM(tot),8,W[7]),
-    ],W));
+    ],W)));
   }
 
   // ══ 3. PRODUCTS ═════════════════════════════════════════
   if (pids.length) {
-    const W = norm(COLW.products,TW);
+    const W = norm([4822,4841,5705],TW);
     const prodRows = [
       secHdr('جدول المنتجات',3,C.GREY_HDR),
+      // Fix 4: col header row white on black; data rows all black text
       colHdr(['البيان','الواحدة','المكونات'],W,C.COL_HDR_BLK),
     ];
     pids.forEach((pid,pi)=>{
       const p=data.products[pid]; const comps=(p.components||[]).filter(c=>c); const pc=PC(pi);
-      const n=Math.max(comps.length,1);
       comps.forEach((comp,ci)=>{
         if(ci===0){
           prodRows.push(new TableRow({children:[
-            C_(p.name||'',{fill:pc.dark,sz:28,w:W[0],color:'000000',rowSpan:n}),
-            C_(p.unit||'',{fill:pc.dark,sz:28,w:W[1],color:'000000',rowSpan:n}),
+            new TableCell({rowSpan:comps.length,shading:{type:ShadingType.CLEAR,fill:pc.dark,color:pc.dark},
+              borders:BORDERS,margins:{top:60,bottom:60,left:80,right:80},
+              width:{size:W[0],type:WidthType.DXA},verticalAlign:VerticalAlign.CENTER,
+              children:[new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{after:0},
+                children:[new TextRun({text:p.name||'',bold:true,size:28,font:FONT,color:'000000'})]})]}),
+            new TableCell({rowSpan:comps.length,shading:{type:ShadingType.CLEAR,fill:pc.dark,color:pc.dark},
+              borders:BORDERS,margins:{top:60,bottom:60,left:80,right:80},
+              width:{size:W[1],type:WidthType.DXA},verticalAlign:VerticalAlign.CENTER,
+              children:[new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{after:0},
+                children:[new TextRun({text:p.unit||'',bold:true,size:28,font:FONT,color:'000000'})]})]}),
             C_(comp,{fill:pc.dark,sz:28,w:W[2],color:'000000'}),
           ]}));
         } else {
@@ -474,336 +446,364 @@ async function generateWord(data) {
         }
       });
     });
-    page(T_(prodRows,W));
+    sections.push(tableSection(T_(prodRows,W)));
   }
 
   // ══ 4. REVENUE ══════════════════════════════════════════
   if (pids.length) {
-    const W = norm(COLW.revenue,TW);
+    const W = norm([756,383,309,309,309,309,309,309,309,309,309,359,359,362],TW);
     const revRows = [
+      // Fix 5: "الإيرادات المتوقعة" black text; last row first 2 cells merged
       secHdr('الإيرادات المتوقعة',14,C.GREY_HDR),
       colHdr(['البيان','الواحدة',...MONTHS],W,C.COL_HDR_BLK),
     ];
     pids.forEach((pid,pi)=>{
       const p=data.products[pid]; const rev=data.revenueData?.[pid]||[]; const pc=PC(pi);
       revRows.push(new TableRow({children:[
-        C_(p.name,{fill:pc.dark,bold:true,sz:28,w:W[0],color:'000000'}),
-        C_(p.unit||'',{fill:pc.dark,bold:true,sz:28,w:W[1],color:'000000'}),
+        C_(p.name,{fill:pc.dark,bold:true,sz:28,w:W[0]}),
+        C_(p.unit||'',{fill:pc.dark,bold:true,sz:28,w:W[1]}),
         ...MONTHS.map((_,m)=>C_(fN(rev[m]?.qty),{fill:m%2===0?pc.mo:pc.me,sz:28,w:W[m+2]})),
       ]}));
       revRows.push(new TableRow({children:[
-        C_('سعر مبيع الواحدة',{fill:pc.dark,sz:28,w:W[0],color:'000000'}),
-        C_('$',{fill:pc.dark,sz:28,w:W[1],color:'000000'}),
+        C_('سعر مبيع الواحدة',{fill:pc.dark,sz:28,w:W[0]}),
+        C_('$',{fill:pc.dark,sz:28,w:W[1]}),
         ...MONTHS.map((_,m)=>C_(fN(rev[m]?.unitPrice),{fill:m%2===0?pc.mo:pc.me,sz:28,w:W[m+2]})),
       ]}));
       revRows.push(new TableRow({children:[
-        C_('سعر المبيع الإجمالي',{fill:pc.dark,sz:28,w:W[0],color:'000000'}),
-        C_('$',{fill:pc.dark,sz:28,w:W[1],color:'000000'}),
+        C_('سعر المبيع الإجمالي',{fill:pc.dark,sz:28,w:W[0]}),
+        C_('$',{fill:pc.dark,sz:28,w:W[1]}),
         ...MONTHS.map((_,m)=>C_(fN(rev[m]?.total||0),{fill:m%2===0?pc.mo:pc.me,sz:28,w:W[m+2]})),
       ]}));
     });
+    // Fix 5: merge first two cells of total row
     const mTots = MONTHS.map((_,m)=>{let t=0;pids.forEach(pid=>{t+=parseFloat(String(data.revenueData?.[pid]?.[m]?.total||'0').replace(/[^0-9.-]/g,''))||0;});return fM(t);});
     revRows.push(new TableRow({children:[
       C_('الإجمالي',{fill:C.COL_HDR_BLK,bold:true,sz:28,colSpan:2,w:W[0]+W[1],align:AlignmentType.CENTER}),
       ...mTots.map((v,m)=>C_(v,{fill:C.COL_HDR_BLK,bold:true,sz:28,w:W[m+2]})),
     ]}));
-    page(T_(revRows,W));
+    sections.push(tableSection(T_(revRows,W)));
   }
 
   // ══ 5. OPS ══════════════════════════════════════════════
   if (pids.length && data.opsData) {
-    const W = norm(COLW.ops,TW);
+    const W = norm([433,285,395,319,324,324,324,324,342,342,342,342,357,357,350],TW);
+    // Fix 6: all black except row2 (months) and last row (totals)
     const opsRows = [
       secHdr('التكاليف التشغيلية',15,C.GREY_HDR),
       colHdr(['البيان','الواحدة','التفاصيل',...MONTHS],W,C.COL_HDR_BLK),
     ];
     pids.forEach((pid,pi)=>{
       const p=data.products[pid]; const comps=(p.components||[]).filter(c=>c);
-      const opsD=data.opsData?.[pid]||{}; const pc=PC(pi); const n=Math.max(comps.length,1);
+      const opsD=data.opsData?.[pid]||{}; const pc=PC(pi);
       comps.forEach((comp,ci)=>{
-        const vals=MONTHS.map((_,m)=>fM(opsD[`${ci}_${m}`]));
+        const vals=MONTHS.map((_,m)=>fN(opsD[`${ci}_${m}`]));
         if(ci===0){
           opsRows.push(new TableRow({children:[
-            C_(p.name||'',{fill:pc.dark,sz:28,w:W[0],color:'000000',rowSpan:n}),
-            C_(p.unit||'',{fill:pc.dark,sz:28,w:W[1],color:'000000',rowSpan:n}),
-            C_(comp,{fill:pc.dark,sz:28,w:W[2],color:'000000'}),
+            new TableCell({rowSpan:comps.length,shading:{type:ShadingType.CLEAR,fill:pc.dark,color:pc.dark},
+              borders:BORDERS,margins:{top:60,bottom:60,left:80,right:80},
+              width:{size:W[0],type:WidthType.DXA},verticalAlign:VerticalAlign.CENTER,
+              children:[new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{after:0},
+                children:[new TextRun({text:p.name||'',bold:true,size:28,font:FONT,color:'000000'})]})]}),
+            new TableCell({rowSpan:comps.length,shading:{type:ShadingType.CLEAR,fill:pc.dark,color:pc.dark},
+              borders:BORDERS,margins:{top:60,bottom:60,left:80,right:80},
+              width:{size:W[1],type:WidthType.DXA},verticalAlign:VerticalAlign.CENTER,
+              children:[new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{after:0},
+                children:[new TextRun({text:p.unit||'',bold:true,size:28,font:FONT,color:'000000'})]})]}),
+            C_(comp,{fill:pc.dark,sz:28,w:W[2],color:'000000',align:AlignmentType.CENTER}),
             ...vals.map((v,m)=>C_(v,{fill:m%2===0?pc.mo:pc.me,sz:28,w:W[m+3],color:'000000'})),
           ]}));
         } else {
           opsRows.push(new TableRow({children:[
-            C_(comp,{fill:pc.dark,sz:28,w:W[2],color:'000000'}),
+            C_(comp,{fill:pc.dark,sz:28,w:W[2],color:'000000',align:AlignmentType.CENTER}),
             ...vals.map((v,m)=>C_(v,{fill:m%2===0?pc.mo:pc.me,sz:28,w:W[m+3],color:'000000'})),
           ]}));
         }
       });
       const subVals=MONTHS.map((_,m)=>fM(opsD[`sub_${m}`]||0));
       opsRows.push(new TableRow({children:[
-        C_(`إجمالي ${p.name}`,{fill:C.SUBTOT,bold:true,sz:28,colSpan:3,w:W[0]+W[1]+W[2],align:AlignmentType.CENTER}),
+        C_(`إجمالي ${p.name}`,{fill:C.SUBTOT,bold:true,sz:28,colSpan:3,w:W.slice(0,3).reduce((a,b)=>a+b,0),align:AlignmentType.CENTER}),
         ...subVals.map((v,m)=>C_(v,{fill:C.SUBTOT,bold:true,sz:28,w:W[m+3]})),
       ]}));
     });
     const opsTots=MONTHS.map((_,m)=>{let t=0;pids.forEach(pid=>{t+=parseFloat(String(data.opsData?.[pid]?.[`sub_${m}`]||'0').replace(/[^0-9.-]/g,''))||0;});return fM(t);});
     opsRows.push(new TableRow({children:[
-      C_('الإجمالي',{fill:C.COL_HDR_BLK,bold:true,sz:28,colSpan:3,w:W[0]+W[1]+W[2],align:AlignmentType.CENTER}),
+      C_('الإجمالي',{fill:C.COL_HDR_BLK,bold:true,sz:28,colSpan:3,w:W.slice(0,3).reduce((a,b)=>a+b,0),align:AlignmentType.CENTER}),
       ...opsTots.map((v,m)=>C_(v,{fill:C.COL_HDR_BLK,bold:true,sz:28,w:W[m+3]})),
     ]}));
-    page(T_(opsRows,W));
+    sections.push(tableSection(T_(opsRows,W)));
   }
 
   // ══ 6. HR ════════════════════════════════════════════════
   if (data.hrRows?.length) {
-    const W=norm(COLW.hr,TW);
-    let tot=0; data.hrRows.forEach(r=>{
-      const q=parseFloat(r.qty)||0;
-      const s=parseFloat(String(r.salary||'0').replace(/[^0-9.-]/g,''))||0;
-      const mo=parseFloat(r.months)||12;
-      tot += q*s*mo;
-    });
-    page(T_([
-      secHdr('الموارد البشرية',8),
-      colHdr(['#','المنصب','النوع','تابع لـ','الراتب الشهري الفردي','عدد أشهر الدوام في السنة','العدد','الراتب الشهري الإجمالي'],W,C.COL_HDR_BLU),
+    const W=norm([149,907,876,321,1288,2325,2731],TW);
+    let tot=0; data.hrRows.forEach(r=>{tot+=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0;});
+    sections.push(tableSection(T_([
+      secHdr('الموارد البشرية',7),
+      colHdr(['#','المنصب','النوع','العدد','تابع لـ','الراتب الشهري الفردي','الراتب الشهري الإجمالي'],W,C.COL_HDR_BLU),
       ...data.hrRows.map((r,i)=>new TableRow({children:[
-        C_(i+1,            {fill:C.NUM_TINT,sz:28,w:W[0]}),
-        C_(r.position||'', {fill:dFill(i),sz:28,w:W[1]}),
-        C_(r.type||'',     {fill:dFill(i),sz:28,w:W[2]}),
-        C_(r.reports||'----------', {fill:dFill(i),sz:28,w:W[3]}),
-        C_(fM(r.salary),   {fill:dFill(i),sz:28,w:W[4]}),
-        C_(r.months||'12', {fill:dFill(i),sz:28,w:W[5]}),
-        C_(r.qty||'',      {fill:dFill(i),sz:28,w:W[6]}),
-        C_(fM(r.total),    {fill:dFill(i),sz:28,w:W[7]}),
+        C_(i+1,            {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[0]}),
+        C_(r.position||'', {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[1]}),
+        C_(r.type||'',     {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[2]}),
+        C_(r.qty||'',      {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[3]}),
+        C_(r.reports||'—', {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[4]}),
+        C_(fM(r.salary),   {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[5]}),
+        C_(fM(r.total),    {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[6]}),
       ]})),
-      totRow('الإجمالي (سنوياً)',fM(tot),8,W[7]),
-    ],W));
+      // Fix 7: "الإجمالي" centered
+      totRow('الإجمالي',fM(tot),7,W[6]),
+    ],W)));
+  }
 
-    // org-chart page (own section; SmartArt-like shapes injected post-process)
-    sections.push(mkSec([
-      new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{before:200,after:200},
-        children:[new TextRun({text:'الهيكل التنظيمي',bold:true,size:32,font:FONT,color:C.DARK_BLUE})]}),
-      new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{before:0,after:0},
-        children:[new TextRun({text:'[[ORGCHART]]',size:2,font:FONT,color:'FFFFFF'})]}),
-    ], VerticalAlign.TOP));
+  // ══ 6b. ORG CHART PAGE — title paragraph, SmartArt injected post-process
+  if (data.hrRows?.length) {
+    sections.push({
+      properties:{page:PAGE_P},
+      children: [
+        new Paragraph({
+          bidirectional:true, alignment:AlignmentType.CENTER,
+          spacing:{before:800,after:400},
+          children:[new TextRun({text:'الهيكل التنظيمي',bold:true,size:36,font:FONT,color:C.DARK_BLUE})],
+        }),
+        new Paragraph({children:[],spacing:{before:0,after:0}}),
+      ],
+    });
   }
 
   // ══ 7. FIXED ════════════════════════════════════════════
   if (data.fixedRows?.length) {
-    const W=norm(COLW.fixed,TW);
-    const isSalaryRow=(r)=>(r.cat==='رواتب') && (String(r.bayan||'').includes('الموظفين') || String(r.notes||'').includes('تلقائي'));
-    let tot=0; data.fixedRows.forEach(r=>{
-      const t=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0;
-      tot += isSalaryRow(r) ? t : t*12;   // salary row already annual; others monthly×12
-    });
-    page(T_([
+    const W=norm([149,500,1000,300,1400,1400,1400],TW);
+    let tot=0; data.fixedRows.forEach(r=>{tot+=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0;});
+    sections.push(tableSection(T_([
       secHdr('التكاليف الثابتة',7),
-      colHdr(['#','الصنف','البيان','ملاحظات','التكلفة الشهرية للواحدة','العدد','التكلفة الشهرية الإجمالية'],W,C.COL_HDR_BLU),
+      colHdr(['#','الصنف','البيان','العدد','ملاحظات','التكلفة الشهرية للواحدة','التكلفة الشهرية الإجمالية'],W,C.COL_HDR_BLU),
       ...data.fixedRows.map((r,i)=>new TableRow({children:[
-        C_(i+1,         {fill:C.NUM_TINT,sz:28,w:W[0]}),
-        C_(r.cat||'',   {fill:dFill(i),sz:28,w:W[1]}),
-        C_(r.bayan||'', {fill:dFill(i),sz:28,w:W[2]}),
-        C_(r.notes||'', {fill:dFill(i),sz:28,w:W[3]}),
-        C_(fM(r.price), {fill:dFill(i),sz:28,w:W[4]}),
-        C_(r.qty||'',   {fill:dFill(i),sz:28,w:W[5]}),
-        C_(fM(r.total), {fill:dFill(i),sz:28,w:W[6]}),
+        C_(i+1,         {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[0]}),
+        C_(r.cat||'',   {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[1]}),
+        C_(r.bayan||'', {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[2]}),
+        C_(r.qty||'',   {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[3]}),
+        C_(r.notes||'', {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[4]}),
+        C_(fM(r.price), {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[5]}),
+        C_(fM(r.total), {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[6]}),
       ]})),
-      totRow('الإجمالي (سنوياً)',fM(tot),7,W[6]),
-    ],W));
+      // Fix 9: "الإجمالي" centered — الإجمالي الشهري
+      totRow('الإجمالي',fM(tot),7,W[6]),
+    ],W)));
   }
 
   // ══ 8. DEP ══════════════════════════════════════════════
   if (data.depRows?.length) {
-    const W=norm(COLW.dep,TW);
+    const W=norm([149,280,1350,450,225,1500,1500,1500],TW);
     let tot=0; data.depRows.forEach(r=>{tot+=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0;});
-    page(T_([
+    sections.push(tableSection(T_([
       secHdr('الاهتلاك',8),
-      colHdr(['#','الصنف','البيان','نسبة الاهتلاك','ملاحظات','قيمة الاهتلاك للواحدة','العدد','قيمة الاهتلاك الإجمالية'],W,C.COL_HDR_BLU),
+      colHdr(['#','الصنف','البيان','نسبة الاهتلاك','العدد','ملاحظات','قيمة الاهتلاك للواحدة','قيمة الاهتلاك الإجمالية'],W,C.COL_HDR_BLU),
       ...data.depRows.map((r,i)=>new TableRow({children:[
-        C_(i+1,               {fill:C.NUM_TINT,sz:28,w:W[0]}),
-        C_(r.cat||'',         {fill:dFill(i),sz:28,w:W[1]}),
-        C_(r.bayan||'',       {fill:dFill(i),sz:28,w:W[2]}),
-        C_((r.pct||'0')+' %', {fill:dFill(i),sz:28,w:W[3]}),
-        C_(r.notes||'',       {fill:dFill(i),sz:28,w:W[4]}),
-        C_(fM(r.perUnit),     {fill:dFill(i),sz:28,w:W[5]}),
-        C_(r.qty||'',         {fill:dFill(i),sz:28,w:W[6]}),
-        C_(fM(r.total),       {fill:dFill(i),sz:28,w:W[7]}),
+        C_(i+1,               {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[0]}),
+        C_(r.cat||'',         {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[1]}),
+        C_(r.bayan||'',       {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[2]}),
+        C_((r.pct||'0')+' %', {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[3]}),
+        C_(r.qty||'',         {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[4]}),
+        C_(r.notes||'',       {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[5]}),
+        C_(fM(r.perUnit),     {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[6]}),
+        C_(fM(r.total),       {fill:i%2===0?C.WHITE:C.ROW_EVEN,sz:28,w:W[7]}),
       ]})),
       totRow('إجمالي قيمة الاهتلاك',fM(tot),8,W[7]),
-    ],W));
+    ],W)));
   }
 
-  const buf = await Packer.toBuffer(new Document({sections}));
-  const withChart = await injectOrgChart(buf, data.hrRows);
-  return finalizeDocx(withChart);
-}
+  // Build the base docx buffer
+  const baseBuffer = await Packer.toBuffer(new Document({sections}));
 
-// docx may emit word/fontTable.xml without a relationship → add it so the
-// package validates cleanly (otherwise MS Word may flag "unreadable content").
-async function finalizeDocx(buffer){
-  try{
-    const zip=await JSZip.loadAsync(buffer);
-    const relsPath='word/_rels/document.xml.rels';
-    const relsFile=zip.file(relsPath), ftFile=zip.file('word/fontTable.xml');
-    if(relsFile && ftFile){
-      let rels=await relsFile.async('string');
-      if(!rels.includes('fontTable.xml')){
-        const ids=[...rels.matchAll(/Id="rId(\d+)"/g)].map(m=>parseInt(m[1]));
-        const nid=(ids.length?Math.max(...ids):0)+1;
-        rels=rels.replace('</Relationships>',
-          `<Relationship Id="rId${nid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/></Relationships>`);
-        zip.file(relsPath, rels);
-        return zip.generateAsync({type:'nodebuffer', compression:'DEFLATE'});
-      }
-    }
-  }catch(_){ /* return original on any issue */ }
-  return buffer;
-}
-
-// ════════════════════════════════════════════════════════════
-//  SmartArt — real Organisation Chart (orgChart1 / accent1_2)
-//  Reuses the genuine layout/colours/quick-style template parts
-//  and generates data1.xml with per-node colour by employee type.
-// ════════════════════════════════════════════════════════════
-function gid(){ return '{'+crypto.randomUUID().toUpperCase()+'}'; }
-
-// light fill (≈ accent lighter 40%) + darker border, by employee type
-function orgFill(type){
-  if(type==='إداري')     return {fill:'8EAADB', line:'4472C4'}; // blue
-  if(type==='مزود خدمة') return {fill:'F4B083', line:'ED7D31'}; // orange
-  return {fill:'A9D18E', line:'70AD47'};                        // green (تنفيذي + default)
-}
-
-// expand employees by quantity → individual nodes + position→id map
-function buildPersons(hrRows){
-  const persons=[];
-  (hrRows||[]).forEach(r=>{
-    const qty=Math.max(parseInt(r.qty)||1,1);
-    for(let k=0;k<qty;k++)
-      persons.push({id:gid(),pos:(r.position||'').trim(),type:(r.type||'').trim(),reports:(r.reports||'').trim()});
-  });
-  const posId={}; persons.forEach(p=>{ if(p.pos && !(p.pos in posId)) posId[p.pos]=p.id; });
-  return {persons,posId};
-}
-
-// build hierarchy tree (roots + children) from persons
-function buildOrgTree(persons,posId){
-  const byId={}; persons.forEach(p=>byId[p.id]={...p,children:[]});
-  const roots=[];
-  persons.forEach(p=>{
-    const pid=(p.reports && posId[p.reports] && posId[p.reports]!==p.id) ? posId[p.reports] : null;
-    if(pid && byId[pid]) byId[pid].children.push(byId[p.id]); else roots.push(byId[p.id]);
-  });
-  return roots;
-}
-
-// ── org-chart layout (positions in EMU; parents centred over children) ──
-function orgLayout(hrRows){
-  const {persons,posId}=buildPersons(hrRows);
-  const roots=buildOrgTree(persons,posId);
-  const boxW=1750000, boxH=820000, hGap=240000, vGap=620000;
-  let cursor=0;
-  (function place(nodes,depth){
-    nodes.forEach(n=>{
-      n.depth=depth;
-      if(!n.children.length){ n.x=cursor*(boxW+hGap); cursor++; }
-      else { place(n.children,depth+1); n.x=(n.children[0].x+n.children[n.children.length-1].x)/2; }
-      n.y=depth*(boxH+vGap);
-    });
-  })(roots,0);
-  const all=[]; (function col(nodes){nodes.forEach(n=>{all.push(n); n.children.length&&col(n.children);});})(roots);
-  if(!all.length) return null;
-  const W=Math.max(...all.map(n=>n.x))+boxW;
-  const H=Math.max(...all.map(n=>n.y))+boxH;
-  return {all,boxW,boxH,vGap,W,H};
-}
-
-// ── SmartArt-like org chart: individual anchored shapes (text renders everywhere),
-//    boxes + elbow connectors, vertically centred on the page (recomputed per size).
-function buildOrgChartParagraphXml(hrRows){
-  const L=orgLayout(hrRows);
-  if(!L) return '';
-  const EMU_IN=914400, TWIP=635;
-  const pageW=16838*TWIP, pageH=11906*TWIP;
-  const safeTop=1.75*EMU_IN, safeBot=1.2*EMU_IN;
-  const availH=(pageH-safeBot)-safeTop;
-  const targetW=pageW-2*520000;
-  const scale=Math.min(1, targetW/L.W, availH/L.H);
-  const sx=v=>Math.round(v*scale);
-  const chartW=Math.round(L.W*scale), chartH=Math.round(L.H*scale);
-  const xOff=Math.round((pageW-chartW)/2);
-  const yOff=Math.round(safeTop+(availH-chartH)/2);
-  const px=x=>xOff+sx(x), py=y=>yOff+sx(y);
-  const nameSz=Math.max(16,Math.min(26,Math.round(26*scale)));
-  const typeSz=Math.max(12,Math.min(20,Math.round(20*scale)));
-  const F=`<w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/>`;
-  const lineClr='4472C4';
-  let z=8000, runs='';
-
-  function anchorWrap(x,y,w,h,inner,name){
-    const zi=z++;
-    return `<w:r><w:drawing>`+
-      `<wp:anchor xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="${zi}" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">`+
-      `<wp:simplePos x="0" y="0"/>`+
-      `<wp:positionH relativeFrom="page"><wp:posOffset>${x}</wp:posOffset></wp:positionH>`+
-      `<wp:positionV relativeFrom="page"><wp:posOffset>${y}</wp:posOffset></wp:positionV>`+
-      `<wp:extent cx="${w}" cy="${h}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/>`+
-      `<wp:docPr id="${zi}" name="${name}${zi}"/><wp:cNvGraphicFramePr/>`+
-      `<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">`+
-      `<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">`+
-      `<wps:wsp xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">`+
-      `<wps:cNvPr id="${zi}" name="${name}${zi}"/>${inner}`+
-      `</wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>`;
+  // Inject SmartArt into the docx zip if we have HR data
+  if (data.hrRows?.length) {
+    return injectSmartArt(baseBuffer, data.hrRows);
   }
-  function lineAnchor(x1,y1,x2,y2){
-    const x=Math.min(x1,x2), y=Math.min(y1,y2), w=Math.max(Math.abs(x2-x1),1), h=Math.max(Math.abs(y2-y1),1);
-    return anchorWrap(x,y,w,h,
-      `<wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${w}" cy="${h}"/></a:xfrm>`+
-      `<a:prstGeom prst="line"><a:avLst/></a:prstGeom>`+
-      `<a:ln w="12700"><a:solidFill><a:srgbClr val="${lineClr}"/></a:solidFill></a:ln></wps:spPr>`+
-      `<wps:bodyPr/>`, 'ln');
-  }
-  function boxAnchor(n){
-    const c=orgFill(n.type), w=sx(L.boxW), h=sx(L.boxH);
-    const txt=`<wps:txbx><w:txbxContent>`+
-      `<w:p><w:pPr><w:bidi/><w:spacing w:after="0" w:line="240" w:lineRule="auto"/><w:jc w:val="center"/></w:pPr>`+
-        `<w:r><w:rPr>${F}<w:b/><w:bCs/><w:sz w:val="${nameSz}"/><w:szCs w:val="${nameSz}"/><w:color w:val="000000"/></w:rPr><w:t xml:space="preserve">${escXml(n.pos)}</w:t></w:r></w:p>`+
-      `<w:p><w:pPr><w:bidi/><w:spacing w:after="0" w:line="240" w:lineRule="auto"/><w:jc w:val="center"/></w:pPr>`+
-        `<w:r><w:rPr>${F}<w:sz w:val="${typeSz}"/><w:szCs w:val="${typeSz}"/><w:color w:val="000000"/></w:rPr><w:t xml:space="preserve">(${escXml(n.type)})</w:t></w:r></w:p>`+
-      `</w:txbxContent></wps:txbx>`;
-    return anchorWrap(px(n.x),py(n.y),w,h,
-      `<wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${w}" cy="${h}"/></a:xfrm>`+
-      `<a:prstGeom prst="roundRect"><a:avLst/></a:prstGeom>`+
-      `<a:solidFill><a:srgbClr val="${c.fill}"/></a:solidFill>`+
-      `<a:ln w="12700"><a:solidFill><a:srgbClr val="${c.line}"/></a:solidFill></a:ln></wps:spPr>`+
-      txt+
-      `<wps:bodyPr rot="0" wrap="square" lIns="18000" tIns="9000" rIns="18000" bIns="9000" anchor="ctr" anchorCtr="0"><a:noAutofit/></wps:bodyPr>`, 'box');
-  }
-
-  // connectors first (lower z), then boxes (higher z, drawn on top)
-  L.all.forEach(n=>{
-    if(!n.children.length) return;
-    const pcx=px(n.x+L.boxW/2), pbot=py(n.y+L.boxH), busY=py(n.y+L.boxH+L.vGap/2);
-    runs+=lineAnchor(pcx,pbot,pcx,busY);
-    const cxs=n.children.map(c=>px(c.x+L.boxW/2));
-    runs+=lineAnchor(Math.min(pcx,...cxs),busY,Math.max(pcx,...cxs),busY);
-    n.children.forEach(c=>{const ccx=px(c.x+L.boxW/2); runs+=lineAnchor(ccx,busY,ccx,py(c.y));});
-  });
-  L.all.forEach(n=>{ runs+=boxAnchor(n); });
-
-  return `<w:p><w:pPr><w:spacing w:after="0"/></w:pPr>${runs}</w:p>`;
+  return baseBuffer;
 }
 
-// replace the [[ORGCHART]] marker paragraph with the anchored-shapes paragraph
-async function injectOrgChart(buffer, hrRows){
-  const {persons}=buildPersons(hrRows);
-  if(!persons.length) return buffer;
-  const para=buildOrgChartParagraphXml(hrRows);
-  if(!para) return buffer;
-  const zip=await JSZip.loadAsync(buffer);
-  let xml=await zip.file('word/document.xml').async('string');
-  xml=xml.replace(/<w:p\b[^>]*>(?:(?!<\/w:p>).)*?\[\[ORGCHART\]\](?:(?!<\/w:p>).)*?<\/w:p>/s, para);
-  zip.file('word/document.xml', xml);
+// ── SmartArt injection via JSZip ──────────────────────────────
+async function injectSmartArt(docxBuffer, hrRows) {
+  const zip = await JSZip.loadAsync(docxBuffer);
+
+  // Build data1.xml with org hierarchy
+  const dataXml = buildSmartArtDataXml(hrRows);
+
+  // Layout: Hierarchy / Organisation Chart (standard MS layout URI)
+  const layoutXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<dgm:layoutDef xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+  uniqueId="urn:microsoft.com/office/officeart/2005/8/layout/orgchart1"
+  minVer="12.0">
+<dgm:title lang="" val=""/>
+<dgm:desc lang="" val=""/>
+<dgm:catLst><dgm:cat type="hierarchy" pri="10100"/></dgm:catLst>
+<dgm:layoutNode name="root"><dgm:varLst><dgm:var name="dir" val="norm"/><dgm:var name="animLvl" val="lvl"/><dgm:var name="animOne" val="one"/><dgm:var name="hierBranch" val="std"/></dgm:varLst></dgm:layoutNode>
+</dgm:layoutDef>`;
+
+  const colorsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<dgm:colorsDef xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+  uniqueId="urn:microsoft.com/office/officeart/2005/8/colors/colorful3"
+  minVer="12.0">
+<dgm:catLst><dgm:cat type="mainScheme" pri="10100"/></dgm:catLst>
+<dgm:styleLbl name="node0"><dgm:fillClrLst><a:schemeClr val="accent1"/></dgm:fillClrLst><dgm:linClrLst><a:schemeClr val="accent1"><a:shade val="50000"/></a:schemeClr></dgm:linClrLst><dgm:effectClrLst><a:schemeClr val="accent1"><a:tint val="50000"/></a:schemeClr></dgm:effectClrLst><dgm:txLinClrLst><a:schemeClr val="lt1"/></dgm:txLinClrLst><dgm:txFillClrLst><a:schemeClr val="lt1"/></dgm:txFillClrLst><dgm:txEffectClrLst><a:schemeClr val="lt1"/></dgm:txEffectClrLst></dgm:styleLbl>
+</dgm:colorsDef>`;
+
+  const styleXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<dgm:styleDef xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+  uniqueId="urn:microsoft.com/office/officeart/2005/8/quickstyle/qs1"
+  minVer="12.0">
+<dgm:catLst><dgm:cat type="mainScheme" pri="10100"/></dgm:catLst>
+<dgm:scene3d><a:camera prst="orthographicFront"/><a:lightRig rig="threePt" dir="t"/></dgm:scene3d>
+<dgm:styleLbl name="node0"><dgm:sp3d/><dgm:txPr/><dgm:style><a:lnRef idx="1"/><a:fillRef idx="2"/><a:effectRef idx="0"/><a:fontRef idx="minor"/></dgm:style></dgm:styleLbl>
+</dgm:styleDef>`;
+
+  // Drawing placeholder (dimensions match A4 portrait content width)
+  const cx = 8229600; // ~9.1 inches in EMU
+  const cy = 3500000; // ~3.9 inches
+  const drawingXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<dsp:drawing xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram"
+  xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+<dsp:spTree><dsp:nvGrpSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/></dsp:spTree>
+</dsp:drawing>`;
+
+  // Add diagram files to zip
+  const diagramFolder = 'word/diagrams/';
+  zip.file(`${diagramFolder}data1.xml`, dataXml);
+  zip.file(`${diagramFolder}layout1.xml`, layoutXml);
+  zip.file(`${diagramFolder}colors1.xml`, colorsXml);
+  zip.file(`${diagramFolder}quickStyle1.xml`, styleXml);
+  zip.file(`${diagramFolder}drawing1.xml`, drawingXml);
+
+  // Add relationship file for diagrams
+  const diagramRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData" Target="../diagrams/data1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramLayout" Target="../diagrams/layout1.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramQuickStyle" Target="../diagrams/quickStyle1.xml"/>
+  <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramColors" Target="../diagrams/colors1.xml"/>
+  <Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramDrawing" Target="../diagrams/drawing1.xml"/>
+</Relationships>`;
+
+  // Update document.xml.rels to add diagram relationships
+  const docRelsPath = 'word/_rels/document.xml.rels';
+  let relsXml = await zip.file(docRelsPath).async('string');
+
+  // Find the next available rId number
+  const existingIds = [...relsXml.matchAll(/Id="rId(\d+)"/g)].map(m=>parseInt(m[1]));
+  const maxId = existingIds.length ? Math.max(...existingIds) : 0;
+  const dm = `rId${maxId+1}`, lo = `rId${maxId+2}`, qs = `rId${maxId+3}`, cs = `rId${maxId+4}`, dw = `rId${maxId+5}`;
+
+  relsXml = relsXml.replace('</Relationships>',
+    `<Relationship Id="${dm}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData" Target="diagrams/data1.xml"/>
+<Relationship Id="${lo}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramLayout" Target="diagrams/layout1.xml"/>
+<Relationship Id="${qs}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramQuickStyle" Target="diagrams/quickStyle1.xml"/>
+<Relationship Id="${cs}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramColors" Target="diagrams/colors1.xml"/>
+<Relationship Id="${dw}" Type="http://schemas.microsoft.com/office/2007/relationships/diagramDrawing" Target="diagrams/drawing1.xml"/>
+</Relationships>`
+  );
+  zip.file(docRelsPath, relsXml);
+
+  // Find the org chart title paragraph in document.xml and insert SmartArt drawing after it
+  let docXml = await zip.file('word/document.xml').async('string');
+
+  const smartArtParagraph = `<w:p>
+<w:pPr><w:bidi w:val="1"/><w:jc w:val="center"/><w:rPr><w:rtl/></w:rPr></w:pPr>
+<w:r><w:drawing>
+<wp:inline distT="0" distB="0" distL="0" distR="0" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
+<wp:extent cx="${cx}" cy="${cy}"/>
+<wp:effectExtent l="0" t="0" r="0" b="0"/>
+<wp:docPr id="9001" name="الهيكل التنظيمي"/>
+<wp:cNvGraphicFramePr/>
+<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram">
+<dgm:relIds xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+  r:dm="${dm}" r:lo="${lo}" r:qs="${qs}" r:cs="${cs}"/>
+</a:graphicData>
+</a:graphic>
+</wp:inline>
+</w:r></w:drawing></w:p>`;
+
+  // Find the "الهيكل التنظيمي" text in the doc and insert SmartArt after its paragraph
+  docXml = docXml.replace(
+    /(<w:p[^>]*>(?:<[^>]+>)*<w:t[^>]*>\s*الهيكل التنظيمي\s*<\/w:t>.*?<\/w:p>)/s,
+    `$1\n${smartArtParagraph}`
+  );
+
+  zip.file('word/document.xml', docXml);
+
   return zip.generateAsync({type:'nodebuffer', compression:'DEFLATE'});
 }
 
-function escXml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function buildSmartArtDataXml(hrRows) {
+  // Expand employees by qty
+  const nodes = [];
+  hrRows.forEach(r => {
+    const qty = parseInt(r.qty)||1;
+    for(let i=0;i<qty;i++) {
+      const idx = nodes.length;
+      const pad = idx.toString(16).toUpperCase().padStart(8,'0');
+      nodes.push({
+        id: `{${pad}-AAAA-BBBB-CCCC-${pad.padStart(12,'0')}}`,
+        pos: r.position||'',
+        type: r.type||'',
+        reports: r.reports||'',
+        isAsst: r.type === 'مزود خدمة',
+      });
+    }
+  });
+
+  const DOC_ID = '{DOCID000-0000-0000-0000-FFFFFFFFFFFF}';
+  const posToId = {};
+  nodes.forEach(n => { if(!posToId[n.pos]) posToId[n.pos] = n.id; });
+
+  let ptXml = `<dgm:pt modelId="${DOC_ID}" type="doc"><dgm:prSet/></dgm:pt>\n`;
+  nodes.forEach((n,i) => {
+    const typeAttr = n.isAsst ? ' type="asst"' : '';
+    const par = `{PAR${i.toString(16).toUpperCase().padStart(8,'0')}}`;
+    const sib = `{SIB${i.toString(16).toUpperCase().padStart(8,'0')}}`;
+    ptXml += `<dgm:pt modelId="${n.id}"${typeAttr}>`;
+    ptXml += `<dgm:prSet lang="ar-SA" phldrT=""/>`;
+    ptXml += `<dgm:spPr/>`;
+    ptXml += `<p:txBody xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">`;
+    ptXml += `<a:bodyPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>`;
+    ptXml += `<a:lstStyle xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>`;
+    ptXml += `<a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:r><a:t>${escXml(n.pos)}</a:t></a:r></a:p>`;
+    ptXml += `<a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:r><a:t>${escXml(n.type)}</a:t></a:r></a:p>`;
+    ptXml += `</p:txBody></dgm:pt>`;
+    ptXml += `<dgm:pt modelId="${par}" type="parTrans"><dgm:prSet lang="ar-SA"/></dgm:pt>`;
+    ptXml += `<dgm:pt modelId="${sib}" type="sibTrans"><dgm:prSet lang="ar-SA"/></dgm:pt>`;
+  });
+
+  let cxnXml = '';
+  let ci = 1000;
+  nodes.forEach((n,i) => {
+    const cid = `{CXN${ci.toString(16).toUpperCase().padStart(8,'0')}}`;
+    ci++;
+    if (!n.reports) {
+      cxnXml += `<dgm:cxn modelId="${cid}" srcId="${DOC_ID}" destId="${n.id}" srcOrd="${i}" destOrd="0"/>`;
+    } else {
+      const pid = posToId[n.reports];
+      if(pid) cxnXml += `<dgm:cxn modelId="${cid}" srcId="${pid}" destId="${n.id}" srcOrd="${i}" destOrd="0"/>`;
+    }
+  });
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+  xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+<dgm:ptLst>${ptXml}</dgm:ptLst>
+<dgm:cxnLst>${cxnXml}</dgm:cxnLst>
+<dgm:bg/>
+<dgm:whole/>
+</dgm:dataModel>`;
+}
+
+function escXml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
 
 
 // ════════════════════════════════════════════════════════════
@@ -864,23 +864,35 @@ app.post('/api/submit', async (req, res) => {
     if (!body?.projectIdea) return res.status(400).json({ success:false, message:'فكرة المشروع مطلوبة' });
 
     const id = genId();
-    const submission = { id, submittedAt: body.submittedAt||new Date().toISOString(), ...body };
-    fs.writeFileSync(path.join(DATA_DIR,`${id}.json`), JSON.stringify(submission,null,2), 'utf8');
     const index = loadIndex();
-    index.unshift({ id, projectIdea:body.projectIdea.substring(0,80), submittedAt:submission.submittedAt, summary:body.summary||{} });
+    const seq = index.length + 1;  // تسلسل النموذج
+    const submission = { id, seq, submittedAt: body.submittedAt||new Date().toISOString(), ...body };
+
+    // احفظ JSON والفهرس فوراً
+    fs.writeFileSync(path.join(DATA_DIR,`${id}.json`), JSON.stringify(submission,null,2), 'utf8');
+    index.unshift({ id, seq, projectIdea:body.projectIdea.substring(0,80), applicantName:body.applicantName||'', submittedAt:submission.submittedAt, summary:body.summary||{} });
     saveIndex(index);
 
-    const [excelBuf, wordBuf] = await Promise.all([generateExcel(body), generateWord(body)]);
-    fs.writeFileSync(path.join(DATA_DIR,`${id}.xlsx`), excelBuf);
-    fs.writeFileSync(path.join(DATA_DIR,`${id}.docx`), wordBuf);
+    console.log(`✅ طلب جديد: ${id} (تسلسل ${seq})`);
 
-    await sendEmail(body, id, excelBuf, wordBuf).catch(e => console.error('Email error:', e.message));
+    // ردّ فوري على المتصفح — لا ننتظر توليد الملفات
+    res.json({ success:true, id, seq });
 
-    console.log(`✅ طلب جديد: ${id}`);
-    return res.json({ success:true, id });
+    // توليد الملفات والبريد في الخلفية (بعد الرد)
+    setImmediate(async () => {
+      try {
+        const [excelBuf, wordBuf] = await Promise.all([generateExcel(submission), generateWord(submission)]);
+        fs.writeFileSync(path.join(DATA_DIR,`${id}.xlsx`), excelBuf);
+        fs.writeFileSync(path.join(DATA_DIR,`${id}.docx`), wordBuf);
+        await sendEmail(submission, id, excelBuf, wordBuf).catch(e => console.error('Email error:', e.message));
+        console.log(`📄 تم توليد ملفات الطلب: ${id}`);
+      } catch(e) {
+        console.error('❌ خطأ في توليد الملفات (خلفية):', e.message);
+      }
+    });
   } catch(err) {
     console.error('❌', err);
-    return res.status(500).json({ success:false, message:err.message });
+    if (!res.headersSent) return res.status(500).json({ success:false, message:err.message });
   }
 });
 
@@ -893,6 +905,21 @@ app.get('/api/submissions/:id', (req, res) => {
   res.json({ success:true, submission:JSON.parse(fs.readFileSync(fp,'utf8')) });
 });
 
+// بناء اسم ملف بصيغة: اسم المقدم - التاريخ - التسلسل
+function buildFileName(data, ext) {
+  const name = (data.applicantName || 'مشروع').trim().replace(/[\/\\:*?"<>|]/g, '').replace(/\s+/g, '_');
+  const dateObj = new Date(data.submittedAt || Date.now());
+  const date = `${dateObj.getFullYear()}-${String(dateObj.getMonth()+1).padStart(2,'0')}-${String(dateObj.getDate()).padStart(2,'0')}`;
+  const seq = data.seq ? String(data.seq).padStart(4,'0') : (data.id || '');
+  return `${name} - ${date} - ${seq}.${ext}`;
+}
+
+// تعيين رأس Content-Disposition يدعم العربية (UTF-8)
+function setDownloadName(res, filename) {
+  const encoded = encodeURIComponent(filename);
+  res.setHeader('Content-Disposition', `attachment; filename="${encoded}"; filename*=UTF-8''${encoded}`);
+}
+
 app.get('/api/download/:id/excel', async (req, res) => {
   const sid = req.params.id.replace(/[^A-Z0-9\-]/g,'');
   const fp  = path.join(DATA_DIR, `${sid}.json`);
@@ -901,7 +928,7 @@ app.get('/api/download/:id/excel', async (req, res) => {
     const data = JSON.parse(fs.readFileSync(fp,'utf8'));
     const buf  = await generateExcel(data);
     res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition',`attachment; filename="project_${sid}.xlsx"`);
+    setDownloadName(res, buildFileName(data, 'xlsx'));
     res.send(buf);
   } catch(e) {
     console.error('Excel gen error:', e.message);
@@ -917,7 +944,7 @@ app.get('/api/download/:id/word', async (req, res) => {
     const data = JSON.parse(fs.readFileSync(fp,'utf8'));
     const buf  = await generateWord(data);
     res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-    res.setHeader('Content-Disposition',`attachment; filename="project_${sid}.docx"`);
+    setDownloadName(res, buildFileName(data, 'docx'));
     res.send(buf);
   } catch(e) {
     console.error('Word gen error:', e.message);
