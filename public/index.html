@@ -708,7 +708,7 @@ function goStep(n) {
   if(n === 4) { if(_revBuiltSig !== sig) { buildRevenueTable(); _revBuiltSig = sig; } }
   if(n === 5) { if(_opsBuiltSig !== sig) { buildOpsTable(); _opsBuiltSig = sig; } }
   if(n === 7) syncSalaryToFixed();
-  if(n === 8) buildDepTable();
+  if(n === 8) syncDepTable();
   window.scrollTo({top: 0, behavior:'smooth'});
 }
 
@@ -1141,8 +1141,12 @@ function delFixedRow(n) {
 // ─── DEPRECIATION ─────────────────────────────────────────
 function syncDepTable() {
   const tbody = document.getElementById('depBody');
+  // preserve any pct values already entered (keyed by founding row id)
+  const prevPct = {};
+  tbody.querySelectorAll('[id^="dpct_"]').forEach(el => { prevPct[el.id.replace('dpct_','')] = el.value; });
   tbody.innerHTML = '';
   let idx = 0;
+  const built = [];
   document.querySelectorAll('[id^="fdep_"]').forEach(cb => {
     if(!cb.checked) return;
     const n = cb.id.replace('fdep_','');
@@ -1151,20 +1155,24 @@ function syncDepTable() {
     const qty = parseFloat(document.getElementById('fqty_'+n)?.value) || 0;
     const price = parseFloat(document.getElementById('fprice_'+n)?.value) || 0;
     const notes = document.getElementById('fnotes_'+n)?.value || '';
+    const pctVal = prevPct[n] != null ? prevPct[n] : '0';
     idx++;
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${idx}</td>
       <td>${cat}</td>
       <td>${bayan}</td>
-      <td class="pct-wrap" style="position:relative"><input type="number" id="dpct_${n}" min="0" max="100" value="0" oninput="calcDepRow('${n}',${price},${qty})"></td>
+      <td class="pct-wrap" style="position:relative"><input type="number" id="dpct_${n}" min="0" max="100" value="${pctVal}" oninput="calcDepRow('${n}',${price},${qty})"></td>
       <td>${notes}</td>
       <td><input type="text" class="computed" id="dpu_${n}" readonly value="$0"></td>
       <td>${qty}</td>
       <td><input type="text" class="computed" id="dpt_${n}" readonly value="$0"></td>
     `;
     tbody.appendChild(tr);
+    built.push({n, price, qty});
   });
+  // recompute each row using the preserved pct
+  built.forEach(({n, price, qty}) => calcDepRow(n, price, qty));
   calcDepTotal();
 }
 
@@ -1556,9 +1564,10 @@ syncSalaryToFixed();
   window._editId = editId;
 
   // Override submit to send PUT instead of POST
-  const origSubmit = window.submitForm;
   window.submitForm = async function() {
     const data = collectFormData();
+    const btn = document.getElementById('submitBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ جاري التعديل...'; }
     try {
       const resp = await fetch('/api/submissions/' + editId, {
         method: 'PUT',
@@ -1570,38 +1579,43 @@ syncSalaryToFixed();
         await downloadWord(editId, result.fileName);
         document.getElementById('mainForm').style.display = 'none';
         document.getElementById('successMsg').style.display = 'block';
-        document.getElementById('successMsg').querySelector('h2').textContent = '✅ تم تحديث النموذج بنجاح!';
+        document.getElementById('successMsg').querySelector('h2').textContent = '✅ تم تعديل النموذج بنجاح!';
       } else {
         alert('خطأ: ' + (result.message || 'غير معروف'));
+        if (btn) { btn.disabled = false; btn.textContent = '✏️ تعديل النموذج'; }
       }
-    } catch(e) { alert('تعذر الاتصال'); }
+    } catch(e) {
+      alert('تعذر الاتصال بالخادم.');
+      if (btn) { btn.disabled = false; btn.textContent = '✏️ تعديل النموذج'; }
+    }
   };
 
-  // Fill step 1
+  // set the submit button label for edit mode
+  setTimeout(()=>{ const sb=document.getElementById('submitBtn'); if(sb) sb.textContent='✏️ تعديل النموذج'; }, 50);
+
+  // Fill EVERYTHING immediately so all summary values are correct on open
   setTimeout(() => {
-    if (d.projectIdea)   { const el=document.getElementById('projectIdea');   if(el) { el.value=d.projectIdea; updateSummary(); } }
+    if (d.projectIdea)   { const el=document.getElementById('projectIdea');   if(el) el.value=d.projectIdea; }
     if (d.applicantName) { const el=document.getElementById('applicantName'); if(el) el.value=d.applicantName; }
     if (d.applicantPhone){ const el=document.getElementById('applicantPhone');if(el) el.value=d.applicantPhone; }
 
-    // Fill founding rows — clear and refill
+    // ── Founding ──
     document.querySelectorAll('[id^="fr_"]').forEach(r=>r.remove());
     foundingRowCount = 0;
     (d.foundingRows||[]).forEach(r => {
       addFoundingRow();
       const n = foundingRowCount;
-      const cats = [...FOUNDING_CATS,...extraFoundingCats];
       const catEl = document.getElementById('fcat_'+n);
       if (catEl) { const opt=[...catEl.options].find(o=>o.value===r.cat); if(opt) catEl.value=r.cat; }
       const b=document.getElementById('fbayan_'+n); if(b) b.value=r.bayan||'';
-      const dep=document.getElementById('fdep_'+n); if(dep) { dep.checked=r.dep||false; }
+      const dep=document.getElementById('fdep_'+n); if(dep) dep.checked=!!r.dep;
       const q=document.getElementById('fqty_'+n); if(q) q.value=r.qty||'1';
       const nt=document.getElementById('fnotes_'+n); if(nt) nt.value=r.notes||'';
       const p=document.getElementById('fprice_'+n); if(p) p.value=r.price||'0';
       calcFoundingRow(n);
     });
 
-    // Fill products
-    Object.values(products).forEach((_,i)=>{ const pids=Object.keys(products); delProduct(parseInt(pids[pids.length-1]||1)); });
+    // ── Products ──
     Object.keys(products).forEach(pid=>delProduct(parseInt(pid)));
     productCount = 0;
     Object.keys(d.products||{}).forEach(pid => {
@@ -1617,7 +1631,7 @@ syncSalaryToFixed();
       });
     });
 
-    // Fill HR rows
+    // ── HR ──
     document.querySelectorAll('[id^="hrr_"]').forEach(r=>r.remove());
     hrRowCount = 0;
     (d.hrRows||[]).forEach(r => {
@@ -1632,13 +1646,13 @@ syncSalaryToFixed();
       calcHRRow(n);
     });
 
-    // Fill fixed rows (recreate locked salary row, then the user rows)
+    // ── Fixed (locked salary row + user rows) ──
     document.querySelectorAll('[id^="fxr_"]').forEach(r=>r.remove());
     fixedRowCount = 0;
     addFixedRow({locked:true});
     (d.fixedRows||[]).forEach(r => {
       const isSalary = (r.cat==='رواتب') && (String(r.bayan||'').indexOf('الموظفين')>=0 || String(r.notes||'').indexOf('تلقائي')>=0);
-      if (isSalary) return; // handled by the locked salary row
+      if (isSalary) return;
       addFixedRow();
       const n=fixedRowCount;
       const catEl=document.getElementById('fxcat_'+n); if(catEl) catEl.value=r.cat||'';
@@ -1650,64 +1664,49 @@ syncSalaryToFixed();
     });
     syncSalaryToFixed();
 
-    updateSummary();
-    console.log('✅ Edit data loaded for:', editId);
-  }, 300);
+    // ── Revenue (build table now so the summary is right immediately) ──
+    buildRevenueTable(); _revBuiltSig = _productSig();
+    Object.keys(d.products||{}).forEach((pid,pi) => {
+      const localPid = pi+1;
+      const rev = d.revenueData?.[pid]||[];
+      for(let m=0;m<12;m++){
+        const r=rev[m]||{};
+        const qEl=document.getElementById(`rev_qty_${localPid}_${m}`); if(qEl) qEl.value=r.qty||0;
+        const uEl=document.getElementById(`rev_uprice_${localPid}_${m}`); if(uEl) uEl.value=r.unitPrice||0;
+        calcRevenue(localPid, m);
+      }
+    });
 
-  // Revenue and Ops need to be loaded after tables are built
-  // Override goStep to populate data when reaching steps 4 & 5
-  const origGoStep = window.goStep;
-  const revLoaded = {done:false}, opsLoaded = {done:false};
-  window.goStep = function(n) {
-    origGoStep(n);
-    if (n===4 && !revLoaded.done) {
-      revLoaded.done = true;
-      setTimeout(() => {
-        const pids = Object.keys(d.products||{});
-        pids.forEach((pid,pi) => {
-          const localPid = pi+1; // matches new productCount ordering
-          const rev = d.revenueData?.[pid]||[];
-          for(let m=0;m<12;m++) {
-            const r=rev[m]||{};
-            const qEl=document.getElementById(`rev_qty_${localPid}_${m}`); if(qEl) qEl.value=r.qty||0;
-            const uEl=document.getElementById(`rev_uprice_${localPid}_${m}`); if(uEl) uEl.value=r.unitPrice||0;
-            calcRevenue(localPid, m);
-          }
-        });
-      }, 100);
-    }
-    if (n===5 && !opsLoaded.done) {
-      opsLoaded.done = true;
-      setTimeout(() => {
-        const pids = Object.keys(d.products||{});
-        pids.forEach((pid,pi) => {
-          const localPid = pi+1;
-          const opsD = d.opsData?.[pid]||{};
-          const p = d.products[pid];
-          const comps=(p.components||[]).filter(c=>c);
-          comps.forEach((_,ci) => {
-            for(let m=0;m<12;m++) {
-              const el=document.getElementById(`ops_${localPid}_${ci}_${m}`); if(el) el.value=opsD[`${ci}_${m}`]||0;
-            }
-          });
-          calcOps(localPid);
-        });
-      }, 100);
-    }
-    if (n===8 && d.depRows?.length) {
-      setTimeout(()=>{
-        d.depRows.forEach((r,i) => {
-          const n2=i+1;
-          // depRows are synced from founding — find matching checkbox
-          const pctEl=document.getElementById('dpct_'+Object.keys(document.querySelectorAll('[id^="dpct_"]'))[i]?.id?.replace('dpct_',''));
-          // Just update pct via direct DOM
-          document.querySelectorAll('[id^="dpct_"]').forEach((el,idx)=>{
-            if(idx===i) { el.value=d.depRows[idx]?.pct||'0'; el.dispatchEvent(new Event('input')); }
-          });
-        });
-      }, 100);
-    }
-  };
+    // ── Operating costs (build table now) ──
+    buildOpsTable(); _opsBuiltSig = _productSig();
+    Object.keys(d.products||{}).forEach((pid,pi) => {
+      const localPid = pi+1;
+      const opsD = d.opsData?.[pid]||{};
+      const comps=((d.products[pid].components)||[]).filter(c=>c);
+      comps.forEach((_,ci) => {
+        for(let m=0;m<12;m++){
+          const el=document.getElementById(`ops_${localPid}_${ci}_${m}`); if(el) el.value=opsD[`${ci}_${m}`]||0;
+        }
+      });
+      calcOps(localPid);
+    });
+
+    // ── Depreciation (rebuild from founding, then restore saved % by order) ──
+    syncDepTable();
+    const dpctEls = [...document.querySelectorAll('#depBody [id^="dpct_"]')];
+    (d.depRows||[]).forEach((r,i) => {
+      const el = dpctEls[i];
+      if (!el) return;
+      el.value = r.pct || '0';
+      const fn = el.id.replace('dpct_','');
+      const price = parseFloat(document.getElementById('fprice_'+fn)?.value)||0;
+      const qty   = parseFloat(document.getElementById('fqty_'+fn)?.value)||0;
+      calcDepRow(fn, price, qty);
+    });
+
+    updateSummary();
+    console.log('✅ Edit data fully loaded for:', editId);
+  }, 300);
 })();
 </script>
 </body>
