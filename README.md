@@ -1,136 +1,87 @@
 # نموذج طرح دراسة مشروع 📋
 
-نظام متكامل (Frontend + Backend) لاستقبال وحفظ بيانات دراسات المشاريع.
+نظام متكامل (Frontend + Backend) لاستقبال بيانات دراسات المشاريع وتوليد ملفّي
+**Word** و **Excel** منها وإرسالهما بالبريد، مع لوحة إدارة لعرض/تعديل/حذف الطلبات.
 
 ---
 
 ## 📁 هيكل المشروع
 
 ```
-project-form/
+project-form-v3/
 ├── public/
-│   └── index.html        ← الفورم الكامل (HTML + CSS + JS)
-├── data/                 ← يتم إنشاؤه تلقائياً عند أول إرسال
-│   ├── index.json        ← فهرس جميع الطلبات
-│   └── XXXX.json         ← بيانات كل طلب منفصلاً
-├── server.js             ← الـ Backend (Express)
+│   ├── index.html        ← الفورم الكامل (8 خطوات)
+│   └── admin.html        ← لوحة الإدارة
+├── assets/
+│   └── letterhead.png    ← ترويسة "مؤسسة المجد التنموية" (هيدر/فوتر كل صفحة)
+├── data/                 ← يُنشأ تلقائياً عند أول إرسال (طلبات + ملفات)
+├── server.js             ← الـ Backend + توليد Word/Excel + SmartArt
 ├── package.json
+├── .gitignore
 └── README.md
 ```
 
 ---
 
-## 🚀 التثبيت والتشغيل
+## ✨ ملف الـ Word الناتج (مطابق للنموذج الرسمي)
 
-### المتطلبات
-- Node.js v16 أو أحدث
-- npm
+أُعيد بناء مولّد الـ Word ليطابق ملف «الملف المطلوب» بالكامل:
 
-### الخطوات
+- ترويسة على كل صفحة: شعار «مؤسسة المجد التنموية» أعلى الصفحة، ومعلومات التواصل
+  والزخرفة أسفلها (صورة assets/letterhead.png مثبّتة كخلفية).
+- صفحة عنوان: «قسم المشاريع التنموية» (أزرق) + «نموذج طرح دراسة مشروع» (برتقالي).
+- ٨ جداول بعرض كامل RTL موسّطة في الصفحة، بخط Sakkal Majalla وبالألوان الدقيقة
+  المطابقة للنموذج (عناوين أقسام كحلية/رمادية، رؤوس أعمدة زرقاء/سوداء، عمود «#»
+  بلون خوخي، صفوف متناوبة، تدرّجات أشهر لكل منتج).
+- دمج الخلايا: اسم المنتج والوحدة ممدودان عمودياً فوق مكوّناتهما.
+- علامة الاهتلاك ✓ بخط Marlett (مطابقة للنموذج).
+- الهيكل التنظيمي: جدول هرمي ملوّن (كل صندوق خلية) — الأبناء أسفل آبائهم مباشرةً،
+  ملوّن حسب نوع الموظف: إداري أزرق · تنفيذي أخضر · مزوّد خدمة برتقالي، وكل صندوق
+  سطران (المنصب + النوع). نُفّذ كجدول Word أصلي (وليس SmartArt) لضمان فتح الملف
+  في Word دون أي رسالة تلف، ولظهور النص والألوان في كل البرامج.
+
+ملاحظة: المستند كامل يُبنى بمكتبة docx (بدون أي حقن XML)، ما يضمن توافقه مع Word.
+صورة الترويسة assets/letterhead.png يجب رفعها مع المشروع (يقرأها الكود وقت التشغيل).
+
+---
+
+## ▶️ التشغيل محلياً
 
 ```bash
-# 1. انتقل إلى مجلد المشروع
-cd project-form
-
-# 2. ثبّت المكتبات
 npm install
-
-# 3. شغّل الخادم
-npm start
+npm start          # http://localhost:3000
 ```
+- الفورم: `http://localhost:3000/`
+- لوحة الإدارة: `http://localhost:3000/admin.html`
 
-افتح المتصفح على: **http://localhost:3000**
+## 🔌 نقاط الـ API
 
-### للتطوير (مع إعادة تشغيل تلقائية)
-```bash
-npm run dev
-```
+| الطريقة | المسار | الوظيفة |
+|--------|--------|---------|
+| POST   | `/api/submit`             | حفظ الطلب + توليد Word/Excel + بريد |
+| GET    | `/api/submissions`        | قائمة الطلبات |
+| GET    | `/api/submissions/:id`    | تفاصيل طلب |
+| PUT    | `/api/submissions/:id`    | تعديل طلب وإعادة توليد ملفاته |
+| DELETE | `/api/submissions/:id`    | حذف طلب |
+| GET    | `/api/download/:id/word`  | تحميل ملف Word |
+| GET    | `/api/download/:id/excel` | تحميل ملف Excel |
 
----
+## 📧 متغيرات البيئة (للبريد — اختيارية)
 
-## 🌐 API Endpoints
+| المتغير | الوصف |
+|---------|-------|
+| `EMAIL_USER`     | بريد Gmail المُرسِل |
+| `EMAIL_PASS`     | App Password |
+| `RECEIVER_EMAIL` | البريد المستلِم |
 
-| الطريقة | المسار | الوصف |
-|---------|--------|-------|
-| `GET` | `/` | عرض الفورم |
-| `POST` | `/api/submit` | إرسال بيانات مشروع جديد |
-| `GET` | `/api/submissions` | قائمة جميع الطلبات |
-| `GET` | `/api/submissions/:id` | تفاصيل طلب محدد |
-| `DELETE` | `/api/submissions/:id` | حذف طلب |
-| `GET` | `/api/export/:id` | تصدير طلب كـ JSON |
+إذا لم تُضبط، يتخطّى النظام إرسال البريد ويكمل عمله طبيعياً.
 
-### مثال: إرسال عبر fetch
-```javascript
-const response = await fetch('/api/submit', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ projectIdea: '...', ... })
-});
-const result = await response.json();
-// { success: true, id: 'LXYZ-ABC123' }
-```
+## ☁️ النشر على Render
 
----
+1. ارفع الملفات على GitHub (مع مجلّد `assets/`).
+2. أنشئ Web Service واربطه بالمستودع.
+3. Build: `npm install` — Start: `npm start`.
+4. اضبط متغيّرات البيئة للبريد (اختياري) ثم Deploy.
 
-## 🌍 النشر على السيرفر
-
-### متغيرات البيئة
-```bash
-PORT=3000   # المنفذ (افتراضي 3000)
-```
-
-### مع PM2 (موصى به للإنتاج)
-```bash
-npm install -g pm2
-pm2 start server.js --name "project-form"
-pm2 save
-pm2 startup
-```
-
-### مع Nginx (Reverse Proxy)
-```nginx
-server {
-    listen 80;
-    server_name yourdomain.com;
-
-    location / {
-        proxy_pass http://localhost:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_cache_bypass $http_upgrade;
-    }
-}
-```
-
----
-
-## 📊 ميزات الفورم
-
-- **8 خطوات** منظمة: فكرة المشروع ← التكاليف التأسيسية ← المنتجات ← الإيرادات ← التكاليف التشغيلية ← التكاليف الثابتة ← الاهتلاك ← الموارد البشرية
-- **ملخص ديناميكي** يتحدث تلقائياً
-- **حسابات تلقائية**: الإجماليات، الأرباح، الاهتلاك
-- **جداول ديناميكية**: إضافة/حذف أسطر
-- **هيكل تنظيمي** يُرسم تلقائياً
-- **قوائم منسدلة** قابلة للتوسيع بإضافة خيارات جديدة
-- **تنسيق العملة** تلقائي بصيغة $12,200
-
----
-
-## 🔒 الأمان (للإنتاج)
-
-يُنصح بإضافة:
-1. **المصادقة** (JWT أو Session)
-2. **Rate Limiting**: `npm install express-rate-limit`
-3. **Helmet**: `npm install helmet`
-4. **التحقق من البيانات**: `npm install joi`
-
-مثال سريع:
-```javascript
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
-
-app.use(helmet());
-app.use('/api/', rateLimit({ windowMs: 15*60*1000, max: 100 }));
-```
+تنبيه: مجلّد `data/` يُمسح مع كل إعادة نشر على خطة Render المجانية (نظام ملفات
+مؤقّت). لحفظ دائم استخدم Disk دائماً أو قاعدة بيانات.
