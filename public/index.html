@@ -352,10 +352,6 @@
         <div class="s-value" id="sum_fixed">$0</div>
       </div>
       <div class="summary-item">
-        <div class="s-label">كلفة التسويق (شهرياً)</div>
-        <div class="s-value" id="sum_marketing">$0</div>
-      </div>
-      <div class="summary-item">
         <div class="s-label">الاهتلاك (سنوياً)</div>
         <div class="s-value" id="sum_dep">$0</div>
       </div>
@@ -464,7 +460,12 @@
         <label for="marketingPlan">خطة التسويق (أفكار رئيسية)</label>
         <textarea id="marketingPlan" name="marketingPlan" rows="3" placeholder="مثال: عرض المنتجات على الصفحة، إنشاء هوية بصرية، النشر على مجموعات واتساب، المشاركة بالمعارض..."></textarea>
         <label for="marketingCost" style="margin-top:16px;display:block">القيمة التقديرية لكلفة التسويق (شهرياً $) — إن وُجدت</label>
-        <input type="number" id="marketingCost" name="marketingCost" min="0" value="0" placeholder="0" oninput="syncMarketingToFixed(); updateSummary()">
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+          <input type="number" id="marketingCost" name="marketingCost" min="0" value="0" placeholder="0" oninput="syncMarketingToFixed(); updateSummary()" style="max-width:220px">
+          <div style="background:#f1f5f9;border-radius:8px;padding:9px 14px;font-size:14px;color:#1F3864">
+            القيمة السنوية: <strong id="marketingAnnual">$0</strong>
+          </div>
+        </div>
 
         <h4 style="margin:22px 0 6px;color:var(--navy,#1F3864)">جدول المنافسين <span style="font-weight:400;font-size:.85em;color:#64748b">(سطر واحد على الأقل مطلوب)</span></h4>
         <div style="overflow-x:auto">
@@ -729,35 +730,58 @@
         </div>
       </div>
       <div class="section-body">
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px">
-          <div style="background:#f1f5f9;border-radius:10px;padding:16px;text-align:center">
+        <!-- monetary figures -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px">
+          <div style="background:#f1f5f9;border-radius:12px;padding:16px;text-align:center">
+            <div style="font-size:13px;color:#64748b;margin-bottom:6px">الإيرادات السنوية المتوقعة</div>
+            <div style="font-size:22px;font-weight:700;color:#1F3864" id="fin_revenue">$0</div></div>
+          <div style="background:#f1f5f9;border-radius:12px;padding:16px;text-align:center">
+            <div style="font-size:13px;color:#64748b;margin-bottom:6px">إجمالي التكاليف التشغيلية السنوية</div>
+            <div style="font-size:22px;font-weight:700;color:#1F3864" id="fin_ops">$0</div></div>
+          <div style="background:#f1f5f9;border-radius:12px;padding:16px;text-align:center">
+            <div style="font-size:13px;color:#64748b;margin-bottom:6px">التكاليف الثابتة السنوية</div>
+            <div style="font-size:22px;font-weight:700;color:#1F3864" id="fin_fixed">$0</div></div>
+          <div style="background:#f1f5f9;border-radius:12px;padding:16px;text-align:center">
             <div style="font-size:13px;color:#64748b;margin-bottom:6px">إجمالي التكاليف التأسيسية</div>
             <div style="font-size:22px;font-weight:700;color:#1F3864" id="fin_founding">$0</div></div>
-          <div style="background:#f1f5f9;border-radius:10px;padding:16px;text-align:center">
-            <div style="font-size:13px;color:#64748b;margin-bottom:6px">إجمالي الإيرادات المتوقعة (سنوياً)</div>
-            <div style="font-size:22px;font-weight:700;color:#1F3864" id="fin_revenue">$0</div></div>
-          <div style="background:#f1f5f9;border-radius:10px;padding:16px;text-align:center">
-            <div style="font-size:13px;color:#64748b;margin-bottom:6px">إجمالي التكاليف التشغيلية (سنوياً)</div>
-            <div style="font-size:22px;font-weight:700;color:#1F3864" id="fin_ops">$0</div></div>
-          <div style="background:#f1f5f9;border-radius:10px;padding:16px;text-align:center">
-            <div style="font-size:13px;color:#64748b;margin-bottom:6px">التكاليف الثابتة (شهرياً)</div>
-            <div style="font-size:22px;font-weight:700;color:#1F3864" id="fin_fixed_m">$0</div></div>
-          <div style="background:#f1f5f9;border-radius:10px;padding:16px;text-align:center">
-            <div style="font-size:13px;color:#64748b;margin-bottom:6px">إجمالي التكاليف الثابتة (سنوياً)</div>
-            <div style="font-size:22px;font-weight:700;color:#1F3864" id="fin_fixed">$0</div></div>
-          <div style="background:#f1f5f9;border-radius:10px;padding:16px;text-align:center">
-            <div style="font-size:13px;color:#64748b;margin-bottom:6px">كلفة التسويق (شهرياً)</div>
-            <div style="font-size:22px;font-weight:700;color:#1F3864" id="fin_marketing">$0</div></div>
-          <div style="background:#f1f5f9;border-radius:10px;padding:16px;text-align:center">
-            <div style="font-size:13px;color:#64748b;margin-bottom:6px">الاهتلاك (سنوياً)</div>
-            <div style="font-size:22px;font-weight:700;color:#1F3864" id="fin_dep">$0</div></div>
-          <div style="background:#f1f5f9;border-radius:10px;padding:16px;text-align:center">
-            <div style="font-size:13px;color:#64748b;margin-bottom:6px">عدد الموظفين في المشروع</div>
-            <div style="font-size:22px;font-weight:700;color:#1F3864" id="fin_employees">0</div></div>
-          <div style="background:#1F3864;border-radius:10px;padding:16px;text-align:center;grid-column:1/-1">
-            <div style="font-size:14px;color:#cdd9ee;margin-bottom:6px">الربح الصافي (سنوياً)</div>
-            <div style="font-size:28px;font-weight:800;color:#ED7D31" id="fin_net">$0</div></div>
+          <div style="background:#1F3864;border-radius:12px;padding:16px;text-align:center;grid-column:1/-1">
+            <div style="font-size:14px;color:#cdd9ee;margin-bottom:6px">صافي الربح السنوي</div>
+            <div style="font-size:30px;font-weight:800;color:#ED7D31" id="fin_net">$0</div></div>
         </div>
+
+        <!-- KPI dashboard -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin-top:16px">
+          <!-- payback -->
+          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center">
+            <div style="font-size:13px;color:#64748b;margin-bottom:10px">فترة استرداد رأس المال</div>
+            <div style="font-size:40px">⏳</div>
+            <div style="margin-top:6px"><span style="font-size:30px;font-weight:800;color:#1F3864" id="fin_payback">—</span>
+              <span style="font-size:14px;color:#64748b;margin-right:4px">سنة</span></div>
+          </div>
+          <!-- net margin gauge -->
+          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;text-align:center">
+            <div style="font-size:13px;color:#64748b;margin-bottom:8px">هامش الربح الصافي</div>
+            <svg viewBox="0 0 120 120" width="118" height="118" style="display:block;margin:0 auto">
+              <circle cx="60" cy="60" r="52" fill="none" stroke="#e2e8f0" stroke-width="12"/>
+              <circle id="ring_margin" cx="60" cy="60" r="52" fill="none" stroke="#2F5496" stroke-width="12"
+                stroke-linecap="round" transform="rotate(-90 60 60)" stroke-dasharray="326.726" stroke-dashoffset="326.726"
+                style="transition:stroke-dashoffset .5s"/>
+              <text id="fin_margin" x="60" y="68" text-anchor="middle" font-size="24" font-weight="700" fill="#1F3864">0%</text>
+            </svg>
+          </div>
+          <!-- ROI gauge -->
+          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;text-align:center">
+            <div style="font-size:13px;color:#64748b;margin-bottom:8px">العائد على الاستثمار</div>
+            <svg viewBox="0 0 120 120" width="118" height="118" style="display:block;margin:0 auto">
+              <circle cx="60" cy="60" r="52" fill="none" stroke="#e2e8f0" stroke-width="12"/>
+              <circle id="ring_roi" cx="60" cy="60" r="52" fill="none" stroke="#ED7D31" stroke-width="12"
+                stroke-linecap="round" transform="rotate(-90 60 60)" stroke-dasharray="326.726" stroke-dashoffset="326.726"
+                style="transition:stroke-dashoffset .5s"/>
+              <text id="fin_roi" x="60" y="68" text-anchor="middle" font-size="24" font-weight="700" fill="#1F3864">0%</text>
+            </svg>
+          </div>
+        </div>
+        <p style="font-size:12px;color:#94a3b8;margin-top:14px;text-align:center">فترة الاسترداد = إجمالي التكاليف التأسيسية ÷ صافي الربح السنوي · الهامش = الربح ÷ الإيرادات · العائد = الربح ÷ التأسيسية</p>
       </div>
     </div>
 
@@ -931,26 +955,49 @@ function updateSummary() {
   const emp = calcTotalEmployees();
   const mk  = parseFloat(document.getElementById('marketingCost')?.value) || 0;
 
-  // top board
+  // top board (marketing no longer shown separately)
   set('sum_founding', fmtMoney(ft));
   set('sum_revenue', fmtMoney(rv));
   set('sum_operational', fmtMoney(ops));
   set('sum_fixed', fmtMoney(fx));
-  set('sum_marketing', fmtMoney(mk));
   set('sum_dep', fmtMoney(dep));
   set('sum_profit', fmtMoney(profit));
   set('sum_employees', emp);
 
-  // financial summary page (step 11)
-  set('fin_founding', fmtMoney(ft));
+  // annual marketing value (shown on the marketing page)
+  set('marketingAnnual', fmtMoney(mk * 12));
+
+  // ── financial summary page (step 11) ──
   set('fin_revenue', fmtMoney(rv));
   set('fin_ops', fmtMoney(ops));
-  set('fin_fixed_m', fmtMoney(fxMonthly));
   set('fin_fixed', fmtMoney(fx));
-  set('fin_marketing', fmtMoney(mk));
-  set('fin_dep', fmtMoney(dep));
-  set('fin_employees', emp);
   set('fin_net', fmtMoney(profit));
+  set('fin_founding', fmtMoney(ft));
+
+  // derived KPIs
+  const fmt1 = x => { const r = Math.round(x*10)/10; return Number.isInteger(r) ? String(r) : r.toFixed(1); };
+  // payback period (years) = founding ÷ annual net profit
+  const payEl = document.getElementById('fin_payback');
+  if (payEl) payEl.textContent = (profit > 0 && ft > 0) ? fmt1(ft / profit) : '—';
+  // net profit margin % = profit ÷ revenue
+  const margin = rv > 0 ? (profit / rv * 100) : 0;
+  // ROI % = profit ÷ founding
+  const roi = ft > 0 ? (profit / ft * 100) : 0;
+  setGauge('ring_margin', 'fin_margin', margin);
+  setGauge('ring_roi', 'fin_roi', roi);
+}
+
+// update an SVG ring gauge (clamps the visual to 0–100%, shows the true %)
+function setGauge(ringId, textId, pct) {
+  const C = 326.726; // 2π·52
+  const ring = document.getElementById(ringId);
+  const txt  = document.getElementById(textId);
+  const fmt1 = x => { const r = Math.round(x*10)/10; return Number.isInteger(r) ? String(r) : r.toFixed(1); };
+  if (txt) txt.textContent = fmt1(pct) + '%';
+  if (ring) {
+    const v = Math.max(0, Math.min(100, pct));
+    ring.style.strokeDashoffset = (C * (1 - v/100)).toFixed(2);
+  }
 }
 
 // ─── FOUNDING TABLE ───────────────────────────────────────
@@ -1801,17 +1848,33 @@ function collectFormData() {
     fixedRows,
     hrRows,
     depRows,
-    summary: {
-      foundingTotal: document.getElementById('sum_founding').textContent,
-      revenueAnnual: document.getElementById('sum_revenue').textContent,
-      opsAnnual: document.getElementById('sum_operational').textContent,
-      fixedMonthly: document.getElementById('fin_fixed_m')?.textContent || '$0',
-      fixedAnnual: document.getElementById('sum_fixed').textContent,
-      marketing: document.getElementById('sum_marketing')?.textContent || '$0',
-      depreciation: document.getElementById('sum_dep').textContent,
-      netProfit: document.getElementById('sum_profit').textContent,
-      employees: document.getElementById('sum_employees').textContent
-    },
+    summary: (() => {
+      const ft = calcFoundingTotal();
+      const rv = calcRevenueAnnual();
+      const ops = calcOpsAnnual();
+      const fxMonthly = calcFixedMonthlyTotal();
+      const fxAnnual = fxMonthly * 12;
+      const dep = calcDepTotal();
+      const profit = rv - ops - fxAnnual - dep;
+      const emp = calcTotalEmployees();
+      const mkM = parseFloat(document.getElementById('marketingCost')?.value) || 0;
+      const r1 = x => Math.round(x*10)/10;
+      return {
+        foundingTotal: fmtMoney(ft),
+        revenueAnnual: fmtMoney(rv),
+        opsAnnual: fmtMoney(ops),
+        fixedMonthly: fmtMoney(fxMonthly),
+        fixedAnnual: fmtMoney(fxAnnual),
+        marketingMonthly: fmtMoney(mkM),
+        marketingAnnual: fmtMoney(mkM*12),
+        depreciation: fmtMoney(dep),
+        netProfit: fmtMoney(profit),
+        employees: String(emp),
+        paybackYears: (profit>0 && ft>0) ? r1(ft/profit) : 0,
+        netMarginPct: rv>0 ? r1(profit/rv*100) : 0,
+        roiPct: ft>0 ? r1(profit/ft*100) : 0
+      };
+    })(),
     submittedAt: new Date().toISOString()
   };
 }
