@@ -443,25 +443,13 @@ async function generateWord(data) {
   // section 1 = title + summary (top-aligned)
   sections.push(mkSec(ch, VerticalAlign.TOP));
 
-  // ══ PAGE 2: الخلاصة المالية ═════════════════════════════
-  {
-    const pm = s => parseFloat(String(s||'0').replace(/[^0-9.-]/g,''))||0;
-    const rv=pm(data.summary?.revenueAnnual), opsA=pm(data.summary?.opsAnnual),
-          fxA=pm(data.summary?.fixedAnnual), ft=pm(data.summary?.foundingTotal),
-          net=pm(data.summary?.netProfit);
-    const payback=(net>0&&ft>0)?ft/net:0, margin=rv>0?net/rv*100:0, roi=ft>0?net/ft*100:0;
-    const f1=x=>{const r=Math.round(x*10)/10;return Number.isInteger(r)?String(r):r.toFixed(1);};
-    page(lblValTable('الخلاصة المالية', [
-      ['الإيرادات السنوية المتوقعة', data.summary?.revenueAnnual||'$0'],
-      ['إجمالي التكاليف التشغيلية السنوية', data.summary?.opsAnnual||'$0'],
-      ['التكاليف الثابتة السنوية', data.summary?.fixedAnnual||'$0'],
-      ['صافي الربح السنوي', data.summary?.netProfit||'$0'],
-      ['إجمالي التكاليف التأسيسية', data.summary?.foundingTotal||'$0'],
-      ['فترة استرداد رأس المال', payback>0 ? (f1(payback)+' سنة') : '—'],
-      ['هامش الربح الصافي', f1(margin)+'%'],
-      ['العائد على الاستثمار', f1(roi)+'%'],
-    ]));
-  }
+  // ══ PAGE 2: الخلاصة المالية (visual dashboard, injected) ═══
+  sections.push(mkSec([
+    new Paragraph({bidirectional:true, alignment:AlignmentType.CENTER, spacing:{before:120,after:0},
+      children:[new TextRun({text:'الخلاصة المالية', bold:true, size:36, font:FONT, color:C.DARK_BLUE})]}),
+    new Paragraph({bidirectional:true, alignment:AlignmentType.CENTER, spacing:{before:0,after:0},
+      children:[new TextRun({text:'[[FINANCE]]', size:2, font:FONT, color:'FFFFFF'})]}),
+  ], VerticalAlign.TOP));
 
   // ══ PAGE 3: معلومات مقدّم المشروع ═══════════════════════
   page(lblValTable('معلومات مقدّم المشروع', [
@@ -702,7 +690,8 @@ async function generateWord(data) {
 
   const buf = await Packer.toBuffer(new Document({sections}));
   const withChart = await injectOrgChart(buf, data.hrRows);
-  return finalizeDocx(withChart);
+  const withFinance = await injectFinance(withChart, data.summary);
+  return finalizeDocx(withFinance);
 }
 
 // docx may emit word/fontTable.xml without a relationship → add it so the
@@ -875,6 +864,88 @@ async function injectOrgChart(buffer, hrRows){
 }
 
 function escXml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+// ── financial dashboard (anchored shapes injected onto page 2) ──────
+const FW = { card:'F1F5F9', track:'E2E8F0', muted:'64748B', netLbl:'CDD9EE',
+  blue:'2F5496', orange:'ED7D31', navy:'1F3864', gray:'94A3B8', green:'63991F' };
+let _fwz = 7000;
+function fwAnchor(x,y,w,h,inner,name){
+  const z=_fwz++;
+  return `<w:r><w:drawing><wp:anchor xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="${z}" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="page"><wp:posOffset>${Math.round(x)}</wp:posOffset></wp:positionH><wp:positionV relativeFrom="page"><wp:posOffset>${Math.round(y)}</wp:posOffset></wp:positionV><wp:extent cx="${Math.round(w)}" cy="${Math.round(h)}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/><wp:docPr id="${z}" name="${name}${z}"/><wp:cNvGraphicFramePr/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:cNvPr id="${z}" name="${name}${z}"/>${inner}</wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>`;
+}
+function fwTxt(lines){
+  const ps=lines.map(l=>`<w:p><w:pPr><w:bidi/><w:spacing w:after="0" w:line="240" w:lineRule="auto"/><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/>${l.bold?'<w:b/><w:bCs/>':''}<w:sz w:val="${l.sz}"/><w:szCs w:val="${l.sz}"/><w:color w:val="${l.color}"/></w:rPr><w:t xml:space="preserve">${escXml(l.text)}</w:t></w:r></w:p>`).join('');
+  return `<wps:txbx><w:txbxContent>${ps}</w:txbxContent></wps:txbx><wps:bodyPr rot="0" wrap="square" lIns="36000" tIns="18000" rIns="36000" bIns="18000" anchor="ctr" anchorCtr="0"><a:noAutofit/></wps:bodyPr>`;
+}
+function fwRect(x,y,w,h,fill,lines,opts={}){
+  const hasLine = opts.line && opts.line!=='none';
+  const ln = hasLine ? `<a:ln w="${opts.lineW||9525}"><a:solidFill><a:srgbClr val="${opts.line}"/></a:solidFill></a:ln>` : `<a:ln><a:noFill/></a:ln>`;
+  const geom=opts.geom||'roundRect';
+  const av=geom==='roundRect'?`<a:avLst><a:gd name="adj" fmla="val ${opts.radius||12000}"/></a:avLst>`:'<a:avLst/>';
+  const fillXml = (fill==='none')?'<a:noFill/>':`<a:solidFill><a:srgbClr val="${fill}"/></a:solidFill>`;
+  return fwAnchor(x,y,w,h,`<wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${Math.round(w)}" cy="${Math.round(h)}"/></a:xfrm><a:prstGeom prst="${geom}">${av}</a:prstGeom>${fillXml}${ln}</wps:spPr>${lines?fwTxt(lines):'<wps:bodyPr/>'}`,'fw');
+}
+function fwRing(cx,cy,r,pct,color,label,valText){
+  const x=cx-r,y=cy-r,d=2*r;
+  const start=16200000, sweep=Math.max(0,Math.min(99.9,pct))/100*360, a2=Math.round((start+sweep*60000)%21600000);
+  const ell=(rr,fill)=>fwRect(cx-rr,cy-rr,2*rr,2*rr,fill,null,{geom:'ellipse'});
+  let out=ell(r,FW.track);                                   // track disc
+  if(sweep>0) out+=fwAnchor(x,y,d,d,`<wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${Math.round(d)}" cy="${Math.round(d)}"/></a:xfrm><a:prstGeom prst="pie"><a:avLst><a:gd name="adj1" fmla="val ${start}"/><a:gd name="adj2" fmla="val ${a2}"/></a:avLst></a:prstGeom><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:ln><a:noFill/></a:ln></wps:spPr><wps:bodyPr/>`,'arc');
+  out+=ell(r*0.60,'FFFFFF');                                 // hole
+  out+=fwAnchor(x,cy-330000,d,660000,`<wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${Math.round(d)}" cy="660000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></wps:spPr>${fwTxt([{text:valText,sz:30,bold:true,color:FW.navy},{text:label,sz:17,bold:false,color:FW.muted}])}`,'rt');
+  return out;
+}
+function fwBar(x,y,w,h,pct,color){
+  let out=fwRect(x,y,w,h,'EEF2F7',null,{geom:'roundRect',radius:50000});
+  const fw=Math.max(0,Math.min(100,pct))/100*w;
+  if(fw>3000) out+=fwRect(x,y,fw,h,color,null,{geom:'roundRect',radius:50000});
+  return out;
+}
+function buildFinanceDashXml(summary){
+  summary=summary||{};
+  const pm=s=>parseFloat(String(s||'0').replace(/[^0-9.-]/g,''))||0;
+  const rv=pm(summary.revenueAnnual), opsA=pm(summary.opsAnnual), fxA=pm(summary.fixedAnnual),
+        ft=pm(summary.foundingTotal), net=pm(summary.netProfit), dep=pm(summary.depreciation);
+  const f1=x=>{const r=Math.round(x*10)/10;return Number.isInteger(r)?String(r):r.toFixed(1);};
+  const payback=(net>0&&ft>0)?f1(ft/net)+' سنة':'—';
+  const margin=rv>0?net/rv*100:0, roi=ft>0?net/ft*100:0;
+  const costs=opsA+fxA+dep, costsPct=rv>0?costs/rv*100:0, profitPct=rv>0?net/rv*100:0;
+  const PW=16838*635, MX=600000, CW=PW-2*MX, gap=170000;
+  _fwz=7000; let s='';
+  // 1) KPI cards
+  const cw=(CW-3*gap)/4, ch=940000, top=1230000;
+  const cards=[['الإيرادات السنوية',summary.revenueAnnual||'$0'],['التكاليف التشغيلية',summary.opsAnnual||'$0'],
+               ['التكاليف الثابتة',summary.fixedAnnual||'$0'],['التكاليف التأسيسية',summary.foundingTotal||'$0']];
+  cards.forEach((c,i)=>{ s+=fwRect(MX+i*(cw+gap),top,cw,ch,FW.card,[{text:c[0],sz:18,bold:false,color:FW.muted},{text:c[1],sz:32,bold:true,color:FW.navy}],{radius:14000}); });
+  // 2) net profit wide card
+  const ny=top+ch+gap, nh=690000;
+  s+=fwRect(MX,ny,CW,nh,FW.navy,[{text:'صافي الربح السنوي',sz:19,bold:false,color:FW.netLbl},{text:summary.netProfit||'$0',sz:40,bold:true,color:FW.orange}],{radius:14000});
+  // 3) payback card + two donut gauges
+  const by=ny+nh+gap, bw=(CW-2*gap)/3, bh=1380000;
+  s+=fwRect(MX,by,bw,bh,FW.card,[{text:'فترة استرداد رأس المال',sz:18,bold:false,color:FW.muted},{text:payback,sz:36,bold:true,color:FW.navy}],{radius:14000});
+  s+=fwRect(MX+bw+gap,by,bw,bh,'FFFFFF',null,{line:FW.track,radius:14000});
+  s+=fwRing(MX+bw+gap+bw/2, by+bh/2, 560000, margin, FW.blue, 'هامش الربح', f1(margin)+'%');
+  s+=fwRect(MX+2*(bw+gap),by,bw,bh,'FFFFFF',null,{line:FW.track,radius:14000});
+  s+=fwRing(MX+2*(bw+gap)+bw/2, by+bh/2, 560000, roi, FW.orange, 'العائد على الاستثمار', f1(roi)+'%');
+  // 4) comparison bars (revenue / costs / profit) scaled to revenue
+  const cy0=by+bh+gap, rowH=270000, rowGap=120000, labW=CW*0.26, barX=MX+CW*0.30, barW=CW*0.66;
+  const rows=[['الإيرادات',100,FW.blue],['التكاليف',costsPct,FW.gray],['صافي الربح',profitPct,FW.green]];
+  rows.forEach((r,i)=>{ const yy=cy0+i*(rowH+rowGap);
+    s+=fwRect(MX,yy-30000,labW,rowH+60000,'none',[{text:r[0],sz:19,bold:false,color:FW.muted}]);
+    s+=fwBar(barX,yy,barW,rowH,r[1],r[2]); });
+  return `<w:p><w:pPr><w:spacing w:after="0"/></w:pPr>${s}</w:p>`;
+}
+async function injectFinance(buffer, summary){
+  try{
+    const para=buildFinanceDashXml(summary);
+    const zip=await JSZip.loadAsync(buffer);
+    let xml=await zip.file('word/document.xml').async('string');
+    if(!xml.includes('[[FINANCE]]')) return buffer;
+    xml=xml.replace(/<w:p\b[^>]*>(?:(?!<\/w:p>).)*?\[\[FINANCE\]\](?:(?!<\/w:p>).)*?<\/w:p>/s, para);
+    zip.file('word/document.xml', xml);
+    return zip.generateAsync({type:'nodebuffer', compression:'DEFLATE'});
+  }catch(_){ return buffer; }
+}
 
 
 // ════════════════════════════════════════════════════════════
