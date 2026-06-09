@@ -217,7 +217,7 @@ async function generateExcel(data) {
     let tot=0;
     data.fixedRows.forEach((r,i) => {
       const v = parseFloat(String(r.total||'0').replace(/[^0-9.]/g,''))||0;
-      tot += isSalaryRow(r) ? v/12 : v;   // monthly
+      tot += v;   // all rows monthly now
       const row = s4.getRow(i+2); row.height=20;
       [i+1, r.cat, r.bayan, r.notes, parseFloat(r.price)||0, r.qty, v]
         .forEach((val,c) => {
@@ -590,7 +590,7 @@ async function generateWord(data) {
     const isSalaryRow=(r)=>(r.cat==='رواتب') && (String(r.bayan||'').includes('الموظفين') || String(r.notes||'').includes('تلقائي'));
     let tot=0; data.fixedRows.forEach(r=>{
       const t=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0;
-      tot += isSalaryRow(r) ? t/12 : t;   // monthly: salary row stored annual → ÷12
+      tot += t;   // all rows are monthly now (salary & marketing rows have qty=1)
     });
     page(T_([
       secHdr('التكاليف الثابتة',7),

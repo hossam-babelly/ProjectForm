@@ -332,8 +332,8 @@
     <h2>📊 ملخص معلومات المشروع</h2>
     <div class="summary-grid">
       <div class="summary-item idea">
-        <div class="s-label">فكرة المشروع</div>
-        <div class="s-value" id="sum_idea">—</div>
+        <div class="s-label">عنوان المشروع</div>
+        <div class="s-value" id="sum_title">—</div>
       </div>
       <div class="summary-item">
         <div class="s-label">إجمالي التكاليف التأسيسية</div>
@@ -350,6 +350,10 @@
       <div class="summary-item">
         <div class="s-label">إجمالي التكاليف الثابتة (سنوياً)</div>
         <div class="s-value" id="sum_fixed">$0</div>
+      </div>
+      <div class="summary-item">
+        <div class="s-label">كلفة التسويق (شهرياً)</div>
+        <div class="s-value" id="sum_marketing">$0</div>
       </div>
       <div class="summary-item">
         <div class="s-label">الاهتلاك (سنوياً)</div>
@@ -374,14 +378,12 @@
       <div class="section-header">
         <div class="s-icon">1</div>
         <div>
-          <h3>المعلومات الأساسية</h3>
-          <p>أدخل فكرة المشروع وبيانات المقدم</p>
+          <h3>معلومات مقدّم المشروع</h3>
+          <p>أدخل بياناتك الشخصية وخبرتك</p>
         </div>
       </div>
       <div class="section-body">
-        <label for="projectIdea">فكرة المشروع *</label>
-        <textarea id="projectIdea" name="projectIdea" rows="4" placeholder="اكتب هنا وصفاً لفكرة المشروع..." oninput="updateSummary()"></textarea>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
           <div>
             <label for="applicantName">اسم مقدم المشروع *</label>
             <input type="text" id="applicantName" name="applicantName" placeholder="الاسم الكامل">
@@ -390,14 +392,100 @@
             <label for="applicantPhone">رقم الهاتف *</label>
             <input type="text" id="applicantPhone" name="applicantPhone" placeholder="مثال: 0955123789">
           </div>
+          <div>
+            <label for="applicantBirth">تاريخ الميلاد</label>
+            <input type="date" id="applicantBirth" name="applicantBirth">
+          </div>
+          <div>
+            <label for="applicantResidence">مكان الإقامة</label>
+            <input type="text" id="applicantResidence" name="applicantResidence" placeholder="المدينة / المنطقة">
+          </div>
+          <div>
+            <label for="applicantJob">العمل الحالي</label>
+            <input type="text" id="applicantJob" name="applicantJob" placeholder="مثال: موظف / طالب / صاحب عمل">
+          </div>
+          <div>
+            <label for="applicantExpYears">عدد سنوات الخبرة</label>
+            <input type="number" id="applicantExpYears" name="applicantExpYears" min="0" placeholder="مثال: 5">
+          </div>
         </div>
+        <label for="applicantExperience" style="margin-top:16px;display:block">الخبرة المرتبطة بالمشروع</label>
+        <textarea id="applicantExperience" name="applicantExperience" rows="3" placeholder="اشرح خبرتك المرتبطة بهذا المشروع..."></textarea>
+      </div>
+    </div>
+
+    <!-- STEP 2: تفاصيل المشروع -->
+    <div class="section-card" data-step="2">
+      <div class="section-header">
+        <div class="s-icon">2</div>
+        <div>
+          <h3>تفاصيل المشروع</h3>
+          <p>عرّف بمشروعك وفكرته</p>
+        </div>
+      </div>
+      <div class="section-body">
+        <label for="projectTitle">عنوان المشروع *</label>
+        <input type="text" id="projectTitle" name="projectTitle" placeholder="اسم / عنوان المشروع" oninput="updateSummary()">
+        <label for="projectIdea" style="margin-top:16px;display:block">شرح فكرة المشروع *</label>
+        <textarea id="projectIdea" name="projectIdea" rows="4" placeholder="اشرح فكرة المشروع بالتفصيل..." oninput="updateSummary()"></textarea>
+        <label for="targetSegments" style="margin-top:16px;display:block">الشرائح المستهدفة</label>
+        <textarea id="targetSegments" name="targetSegments" rows="2" placeholder="مثال: العائلات، الطلاب، أصحاب المطاعم..."></textarea>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
+          <div>
+            <label for="placeType">نوع المكان المقترح للمشروع</label>
+            <select id="placeType" name="placeType">
+              <option value="">— اختر —</option>
+              <option>أونلاين</option><option>منزلي</option><option>موقع عمل</option><option>أخرى</option>
+            </select>
+          </div>
+          <div>
+            <label for="placeStatus">وضع المكان</label>
+            <select id="placeStatus" name="placeStatus">
+              <option value="">— اختر —</option>
+              <option>آجار</option><option>ملك</option><option>إعارة</option><option>مشاركة</option><option>أخرى</option>
+            </select>
+          </div>
+        </div>
+        <label for="projectAddress" style="margin-top:16px;display:block">عنوان / موقع المشروع</label>
+        <input type="text" id="projectAddress" name="projectAddress" placeholder="العنوان الفعلي، أو الموقع الإلكتروني إن كان أونلاين (مثلاً: اسم الصفحة/الموقع)">
+      </div>
+    </div>
+
+    <!-- STEP 3: التسويق والمبيع -->
+    <div class="section-card" data-step="3">
+      <div class="section-header">
+        <div class="s-icon">3</div>
+        <div>
+          <h3>التسويق والمبيع</h3>
+          <p>خطة التسويق والمنافسون وقنوات البيع</p>
+        </div>
+      </div>
+      <div class="section-body">
+        <label for="marketingPlan">خطة التسويق (أفكار رئيسية)</label>
+        <textarea id="marketingPlan" name="marketingPlan" rows="3" placeholder="مثال: عرض المنتجات على الصفحة، إنشاء هوية بصرية، النشر على مجموعات واتساب، المشاركة بالمعارض..."></textarea>
+        <label for="marketingCost" style="margin-top:16px;display:block">القيمة التقديرية لكلفة التسويق (شهرياً $) — إن وُجدت</label>
+        <input type="number" id="marketingCost" name="marketingCost" min="0" value="0" placeholder="0" oninput="syncMarketingToFixed(); updateSummary()">
+
+        <h4 style="margin:22px 0 6px;color:var(--navy,#1F3864)">جدول المنافسين <span style="font-weight:400;font-size:.85em;color:#64748b">(سطر واحد على الأقل مطلوب)</span></h4>
+        <div style="overflow-x:auto">
+          <table class="dyn-table" id="compTable">
+            <thead>
+              <tr><th>#</th><th>اسم المنافس</th><th>نقاط القوة</th><th>نقاط الضعف</th><th></th></tr>
+            </thead>
+            <tbody id="compBody"></tbody>
+          </table>
+        </div>
+        <button type="button" class="add-row-btn" onclick="addCompRow()">➕ إضافة منافس</button>
+
+        <label for="salesChannels" style="margin-top:22px;display:block">قنوات المبيع</label>
+        <textarea id="salesChannels" name="salesChannels" rows="2" placeholder="مثال: مندوبو مبيعات، تشبيك مع محلات، بيع عبر الهاتف، توصيل للمنزل، بيع مباشر..."></textarea>
       </div>
     </div>
 
     <!-- STEP 2: التكاليف التأسيسية -->
-    <div class="section-card" data-step="2">
+    <div class="section-card" data-step="4">
       <div class="section-header">
-        <div class="s-icon">2</div>
+        <div class="s-icon">4</div>
         <div>
           <h3>التكاليف التأسيسية</h3>
           <p>أدخل جميع بنود التكاليف التأسيسية للمشروع</p>
@@ -439,9 +527,9 @@
     </div>
 
     <!-- STEP 3: جدول المنتجات -->
-    <div class="section-card" data-step="3">
+    <div class="section-card" data-step="5">
       <div class="section-header">
-        <div class="s-icon">3</div>
+        <div class="s-icon">5</div>
         <div>
           <h3>جدول المنتجات</h3>
           <p>أدخل المنتجات ومكوناتها</p>
@@ -457,9 +545,9 @@
     </div>
 
     <!-- STEP 4: الإيرادات المتوقعة -->
-    <div class="section-card" data-step="4">
+    <div class="section-card" data-step="6">
       <div class="section-header">
-        <div class="s-icon">4</div>
+        <div class="s-icon">6</div>
         <div>
           <h3>الإيرادات المتوقعة</h3>
           <p>أدخل الكميات وسعر البيع لكل منتج شهرياً</p>
@@ -481,9 +569,9 @@
     </div>
 
     <!-- STEP 5: التكاليف التشغيلية -->
-    <div class="section-card" data-step="5">
+    <div class="section-card" data-step="7">
       <div class="section-header">
-        <div class="s-icon">5</div>
+        <div class="s-icon">7</div>
         <div>
           <h3>التكاليف التشغيلية</h3>
           <p>أدخل تكلفة مكونات كل منتج شهرياً</p>
@@ -501,9 +589,9 @@
     </div>
 
     <!-- STEP 6: الموارد البشرية -->
-    <div class="section-card" data-step="6">
+    <div class="section-card" data-step="8">
       <div class="section-header">
-        <div class="s-icon">6</div>
+        <div class="s-icon">8</div>
         <div>
           <h3>الموارد البشرية</h3>
           <p>أدخل بيانات الموظفين والرواتب</p>
@@ -549,9 +637,9 @@
     </div>
 
     <!-- STEP 7: التكاليف الثابتة -->
-    <div class="section-card" data-step="7">
+    <div class="section-card" data-step="9">
       <div class="section-header">
-        <div class="s-icon">7</div>
+        <div class="s-icon">9</div>
         <div>
           <h3>التكاليف الثابتة</h3>
           <p>أدخل التكاليف الثابتة الشهرية</p>
@@ -591,9 +679,9 @@
     </div>
 
     <!-- STEP 8: الاهتلاك -->
-    <div class="section-card" data-step="8">
+    <div class="section-card" data-step="10">
       <div class="section-header">
-        <div class="s-icon">8</div>
+        <div class="s-icon">10</div>
         <div>
           <h3>جدول الاهتلاك</h3>
           <p>يتم تعبئته تلقائياً من التكاليف التأسيسية</p>
@@ -631,6 +719,48 @@
       </div>
     </div>
 
+    <!-- STEP 11: الخلاصة المالية -->
+    <div class="section-card" data-step="11">
+      <div class="section-header">
+        <div class="s-icon">11</div>
+        <div>
+          <h3>الخلاصة المالية</h3>
+          <p>ملخّص جميع البيانات المالية للمشروع — راجعها ثم أرسِل النموذج</p>
+        </div>
+      </div>
+      <div class="section-body">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px">
+          <div style="background:#f1f5f9;border-radius:10px;padding:16px;text-align:center">
+            <div style="font-size:13px;color:#64748b;margin-bottom:6px">إجمالي التكاليف التأسيسية</div>
+            <div style="font-size:22px;font-weight:700;color:#1F3864" id="fin_founding">$0</div></div>
+          <div style="background:#f1f5f9;border-radius:10px;padding:16px;text-align:center">
+            <div style="font-size:13px;color:#64748b;margin-bottom:6px">إجمالي الإيرادات المتوقعة (سنوياً)</div>
+            <div style="font-size:22px;font-weight:700;color:#1F3864" id="fin_revenue">$0</div></div>
+          <div style="background:#f1f5f9;border-radius:10px;padding:16px;text-align:center">
+            <div style="font-size:13px;color:#64748b;margin-bottom:6px">إجمالي التكاليف التشغيلية (سنوياً)</div>
+            <div style="font-size:22px;font-weight:700;color:#1F3864" id="fin_ops">$0</div></div>
+          <div style="background:#f1f5f9;border-radius:10px;padding:16px;text-align:center">
+            <div style="font-size:13px;color:#64748b;margin-bottom:6px">التكاليف الثابتة (شهرياً)</div>
+            <div style="font-size:22px;font-weight:700;color:#1F3864" id="fin_fixed_m">$0</div></div>
+          <div style="background:#f1f5f9;border-radius:10px;padding:16px;text-align:center">
+            <div style="font-size:13px;color:#64748b;margin-bottom:6px">إجمالي التكاليف الثابتة (سنوياً)</div>
+            <div style="font-size:22px;font-weight:700;color:#1F3864" id="fin_fixed">$0</div></div>
+          <div style="background:#f1f5f9;border-radius:10px;padding:16px;text-align:center">
+            <div style="font-size:13px;color:#64748b;margin-bottom:6px">كلفة التسويق (شهرياً)</div>
+            <div style="font-size:22px;font-weight:700;color:#1F3864" id="fin_marketing">$0</div></div>
+          <div style="background:#f1f5f9;border-radius:10px;padding:16px;text-align:center">
+            <div style="font-size:13px;color:#64748b;margin-bottom:6px">الاهتلاك (سنوياً)</div>
+            <div style="font-size:22px;font-weight:700;color:#1F3864" id="fin_dep">$0</div></div>
+          <div style="background:#f1f5f9;border-radius:10px;padding:16px;text-align:center">
+            <div style="font-size:13px;color:#64748b;margin-bottom:6px">عدد الموظفين في المشروع</div>
+            <div style="font-size:22px;font-weight:700;color:#1F3864" id="fin_employees">0</div></div>
+          <div style="background:#1F3864;border-radius:10px;padding:16px;text-align:center;grid-column:1/-1">
+            <div style="font-size:14px;color:#cdd9ee;margin-bottom:6px">الربح الصافي (سنوياً)</div>
+            <div style="font-size:28px;font-weight:800;color:#ED7D31" id="fin_net">$0</div></div>
+        </div>
+      </div>
+    </div>
+
     <!-- NAV BUTTONS -->
     <div class="nav-btns">
       <button type="button" class="btn btn-secondary" id="prevBtn" onclick="changeStep(-1)" disabled>⟩ السابق</button>
@@ -652,7 +782,7 @@
 // ─── STATE ───────────────────────────────────────────────
 const MONTHS = ['شهر 1','شهر 2','شهر 3','شهر 4','شهر 5','شهر 6','شهر 7','شهر 8','شهر 9','شهر 10','شهر 11','شهر 12'];
 let currentStep = 1;
-const TOTAL_STEPS = 8;
+const TOTAL_STEPS = 11;
 
 // Dropdown options
 const FOUNDING_CATS = ['آلات','معدات','مركبات','أجهزة حاسوبية','أجهزة موبايل','أخرى'];
@@ -676,7 +806,7 @@ function parseMoney(s) {
 
 // ─── STEP NAVIGATION ─────────────────────────────────────
 function buildProgress() {
-  const labels = ['المعلومات الأساسية','التكاليف التأسيسية','المنتجات','الإيرادات','التكاليف التشغيلية','الموارد البشرية','التكاليف الثابتة','الاهتلاك'];
+  const labels = ['معلومات المقدّم','تفاصيل المشروع','التسويق والمبيع','التكاليف التأسيسية','المنتجات','الإيرادات','التكاليف التشغيلية','الموارد البشرية','التكاليف الثابتة','الاهتلاك','الخلاصة المالية'];
   const bar = document.getElementById('progressBar');
   bar.innerHTML = '';
   labels.forEach((l,i) => {
@@ -705,51 +835,106 @@ function goStep(n) {
   document.getElementById('stepLabel').textContent = `خطوة ${n} من ${TOTAL_STEPS}`;
   buildProgress();
   const sig = _productSig();
-  if(n === 4) { if(_revBuiltSig !== sig) { buildRevenueTable(); _revBuiltSig = sig; } }
-  if(n === 5) { if(_opsBuiltSig !== sig) { buildOpsTable(); _opsBuiltSig = sig; } }
-  if(n === 7) syncSalaryToFixed();
-  if(n === 8) syncDepTable();
+  if(n === 6) { if(_revBuiltSig !== sig) { buildRevenueTable(); _revBuiltSig = sig; } }
+  if(n === 7) { if(_opsBuiltSig !== sig) { buildOpsTable(); _opsBuiltSig = sig; } }
+  if(n === 9) syncSalaryToFixed();
+  if(n === 10) syncDepTable();
+  if(n === 11) updateSummary();
   window.scrollTo({top: 0, behavior:'smooth'});
 }
 
 function changeStep(dir) {
   const next = currentStep + dir;
   if(next < 1 || next > TOTAL_STEPS) return;
+  if(dir > 0 && !validateStep(currentStep)) return;
   goStep(next);
+}
+
+function validateStep(n) {
+  if(n === 3) {
+    const filled = [...document.querySelectorAll('#compBody [id^="compname_"]')].some(el => el.value.trim());
+    if(!filled) { alert('يرجى تعبئة منافس واحد على الأقل في جدول المنافسين قبل المتابعة.'); return false; }
+  }
+  return true;
+}
+
+// ─── COMPETITORS (step 3) ───────────────────────────────
+let compRowCount = 0;
+function addCompRow(data) {
+  compRowCount++; const n = compRowCount;
+  const tr = document.createElement('tr');
+  tr.id = `compr_${n}`;
+  tr.innerHTML = `
+    <td>${n}</td>
+    <td><input type="text" id="compname_${n}" placeholder="اسم المنافس"></td>
+    <td><input type="text" id="compstr_${n}" placeholder="نقاط القوة"></td>
+    <td><input type="text" id="compweak_${n}" placeholder="نقاط الضعف"></td>
+    <td><button type="button" class="del-btn" onclick="delCompRow(${n})">🗑</button></td>
+  `;
+  document.getElementById('compBody').appendChild(tr);
+  if (data) {
+    document.getElementById('compname_'+n).value = data.name || '';
+    document.getElementById('compstr_'+n).value = data.strengths || '';
+    document.getElementById('compweak_'+n).value = data.weaknesses || '';
+  }
+}
+function delCompRow(n) {
+  if (document.querySelectorAll('#compBody tr').length <= 1) {
+    alert('يجب أن يبقى منافس واحد على الأقل.'); return;
+  }
+  document.getElementById('compr_'+n)?.remove();
+}
+
+// ─── MARKETING COST → locked fixed-cost row ─────────────
+function syncMarketingToFixed() {
+  const amt = parseFloat(document.getElementById('marketingCost')?.value) || 0;
+  let row = document.querySelector('#fixedBody tr[data-marketing="1"]');
+  if (amt <= 0) { if (row) { row.remove(); calcFixedMonthlyTotal(); updateSummary(); } return; }
+  if (!row) { addFixedRow({marketing:true}); row = document.querySelector('#fixedBody tr[data-marketing="1"]'); }
+  const n = row.id.replace('fxr_','');
+  const p=document.getElementById('fxprice_'+n); if(p) p.value=amt;
+  const q=document.getElementById('fxqty_'+n); if(q) q.value=1;
+  const t=document.getElementById('fxtotal_'+n); if(t) t.value=fmtMoney(amt);
+  calcFixedMonthlyTotal();
+  updateSummary();
 }
 
 // ─── SUMMARY ─────────────────────────────────────────────
 function updateSummary() {
-  const idea = document.getElementById('projectIdea').value.trim();
-  document.getElementById('sum_idea').textContent = idea || '—';
+  const set = (id,val) => { const el=document.getElementById(id); if(el) el.textContent=val; };
+  const title = (document.getElementById('projectTitle')?.value||'').trim();
+  set('sum_title', title || '—');
 
-  // founding total
-  const ft = calcFoundingTotal();
-  document.getElementById('sum_founding').textContent = fmtMoney(ft);
-
-  // revenue annual
-  const rv = calcRevenueAnnual();
-  document.getElementById('sum_revenue').textContent = fmtMoney(rv);
-
-  // ops annual
+  const ft  = calcFoundingTotal();
+  const rv  = calcRevenueAnnual();
   const ops = calcOpsAnnual();
-  document.getElementById('sum_operational').textContent = fmtMoney(ops);
-
-  // fixed annual (salary row already annual + other rows × 12)
-  const fx = calcFixedAnnualTotal();
-  document.getElementById('sum_fixed').textContent = fmtMoney(fx);
-
-  // depreciation
+  const fxMonthly = calcFixedMonthlyTotal();
+  const fx  = fxMonthly * 12;
   const dep = calcDepTotal();
-  document.getElementById('sum_dep').textContent = fmtMoney(dep);
-
-  // net profit
   const profit = rv - ops - fx - dep;
-  document.getElementById('sum_profit').textContent = fmtMoney(profit);
-
-  // employees
   const emp = calcTotalEmployees();
-  document.getElementById('sum_employees').textContent = emp;
+  const mk  = parseFloat(document.getElementById('marketingCost')?.value) || 0;
+
+  // top board
+  set('sum_founding', fmtMoney(ft));
+  set('sum_revenue', fmtMoney(rv));
+  set('sum_operational', fmtMoney(ops));
+  set('sum_fixed', fmtMoney(fx));
+  set('sum_marketing', fmtMoney(mk));
+  set('sum_dep', fmtMoney(dep));
+  set('sum_profit', fmtMoney(profit));
+  set('sum_employees', emp);
+
+  // financial summary page (step 11)
+  set('fin_founding', fmtMoney(ft));
+  set('fin_revenue', fmtMoney(rv));
+  set('fin_ops', fmtMoney(ops));
+  set('fin_fixed_m', fmtMoney(fxMonthly));
+  set('fin_fixed', fmtMoney(fx));
+  set('fin_marketing', fmtMoney(mk));
+  set('fin_dep', fmtMoney(dep));
+  set('fin_employees', emp);
+  set('fin_net', fmtMoney(profit));
 }
 
 // ─── FOUNDING TABLE ───────────────────────────────────────
@@ -1058,19 +1243,33 @@ let fixedRowCount = 0;
 function addFixedRow(opts={}) {
   fixedRowCount++;
   const n = fixedRowCount;
-  const locked = !!opts.locked;
+  const locked = !!opts.locked;        // salaries row
+  const marketing = !!opts.marketing;  // marketing row
   const tbody = document.getElementById('fixedBody');
   const tr = document.createElement('tr');
   tr.id = `fxr_${n}`;
+  const lockStyle = 'background:#f1f5f9;cursor:not-allowed';
   if (locked) {
     tr.dataset.salary = '1';
     tr.innerHTML = `
       <td>${n}</td>
-      <td><input type="text" id="fxcat_${n}" value="رواتب" readonly style="background:#f1f5f9;cursor:not-allowed"></td>
-      <td><input type="text" id="fxbayan_${n}" value="رواتب الموظفين (كامل الهيكلية)" readonly style="background:#f1f5f9;cursor:not-allowed"></td>
-      <td><input type="text" id="fxnotes_${n}" value="يُحسب تلقائياً من جدول الموارد البشرية" readonly style="background:#f1f5f9;cursor:not-allowed"></td>
-      <td><input type="number" id="fxprice_${n}" value="0" readonly style="background:#f1f5f9;cursor:not-allowed"></td>
-      <td><input type="number" id="fxqty_${n}" value="12" readonly style="background:#f1f5f9;cursor:not-allowed"></td>
+      <td><input type="text" id="fxcat_${n}" value="رواتب" readonly style="${lockStyle}"></td>
+      <td><input type="text" id="fxbayan_${n}" value="رواتب الموظفين (كامل الهيكلية)" readonly style="${lockStyle}"></td>
+      <td><input type="text" id="fxnotes_${n}" value="يُحسب تلقائياً من جدول الموارد البشرية" readonly style="${lockStyle}"></td>
+      <td><input type="number" id="fxprice_${n}" value="0" readonly style="${lockStyle}"></td>
+      <td><input type="number" id="fxqty_${n}" value="1" readonly style="${lockStyle}"></td>
+      <td><input type="text" class="computed" id="fxtotal_${n}" readonly value="$0"></td>
+      <td><span title="سطر تلقائي غير قابل للحذف">🔒</span></td>
+    `;
+  } else if (marketing) {
+    tr.dataset.marketing = '1';
+    tr.innerHTML = `
+      <td>${n}</td>
+      <td><input type="text" id="fxcat_${n}" value="تسويق" readonly style="${lockStyle}"></td>
+      <td><input type="text" id="fxbayan_${n}" value="كلفة التسويق" readonly style="${lockStyle}"></td>
+      <td><input type="text" id="fxnotes_${n}" value="يُحسب تلقائياً من صفحة التسويق والمبيع" readonly style="${lockStyle}"></td>
+      <td><input type="number" id="fxprice_${n}" value="0" readonly style="${lockStyle}"></td>
+      <td><input type="number" id="fxqty_${n}" value="1" readonly style="${lockStyle}"></td>
       <td><input type="text" class="computed" id="fxtotal_${n}" readonly value="$0"></td>
       <td><span title="سطر تلقائي غير قابل للحذف">🔒</span></td>
     `;
@@ -1107,32 +1306,24 @@ function calcFixedRow(n) {
   updateSummary();
 }
 
-// footer total — MONTHLY fixed cost (salary row stored annual → ÷12)
+// footer total — MONTHLY fixed cost (all rows are monthly now)
 function calcFixedMonthlyTotal() {
   let monthly = 0;
-  document.querySelectorAll('#fixedBody tr[id^="fxr_"]').forEach(tr => {
-    const n = tr.id.replace('fxr_','');
-    const tot = parseMoney(document.getElementById('fxtotal_'+n)?.value || 0);
-    monthly += tr.dataset.salary === '1' ? tot/12 : tot;
-  });
+  document.querySelectorAll('#fixedBody [id^="fxtotal_"]').forEach(el => { monthly += parseMoney(el.value); });
   document.getElementById('fixedTotal').value = fmtMoney(monthly);
   return monthly;
 }
 
-// true ANNUAL fixed cost: salary row (already annual) + other rows × 12
+// ANNUAL fixed cost = monthly × 12
 function calcFixedAnnualTotal() {
-  let annual = 0;
-  document.querySelectorAll('#fixedBody tr[id^="fxr_"]').forEach(tr => {
-    const n = tr.id.replace('fxr_','');
-    const tot = parseMoney(document.getElementById('fxtotal_'+n)?.value || 0);
-    annual += tr.dataset.salary === '1' ? tot : tot * 12;
-  });
-  return annual;
+  let monthly = 0;
+  document.querySelectorAll('#fixedBody [id^="fxtotal_"]').forEach(el => { monthly += parseMoney(el.value); });
+  return monthly * 12;
 }
 
 function delFixedRow(n) {
   const tr = document.getElementById('fxr_'+n);
-  if (tr && tr.dataset.salary === '1') return; // salary row is locked
+  if (tr && (tr.dataset.salary === '1' || tr.dataset.marketing === '1')) return; // auto rows are locked
   tr?.remove();
   calcFixedMonthlyTotal();
   updateSummary();
@@ -1283,8 +1474,8 @@ function syncSalaryToFixed() {
   const totEl   = document.getElementById('fxtotal_'+n);
   const monthly = hrAnnual / 12;
   if (priceEl) priceEl.value = Math.round(monthly * 100) / 100;
-  if (qtyEl)   qtyEl.value = 12;
-  if (totEl)   totEl.value = fmtMoney(hrAnnual);   // 12 × (annual/12) = annual
+  if (qtyEl)   qtyEl.value = 1;
+  if (totEl)   totEl.value = fmtMoney(monthly);   // monthly salaries (annual ÷ 12)
   calcFixedMonthlyTotal();
   updateSummary();
 }
@@ -1510,10 +1701,39 @@ function collectFormData() {
     });
   });
 
+  // competitors (step 3)
+  const competitors = [];
+  document.querySelectorAll('#compBody tr[id^="compr_"]').forEach(tr => {
+    const n = tr.id.replace('compr_','');
+    const name = document.getElementById('compname_'+n)?.value || '';
+    competitors.push({
+      name,
+      strengths:  document.getElementById('compstr_'+n)?.value || '',
+      weaknesses: document.getElementById('compweak_'+n)?.value || '',
+    });
+  });
+
   return {
-    projectIdea:    document.getElementById('projectIdea').value,
+    // applicant (step 1)
     applicantName:  document.getElementById('applicantName')?.value || '',
     applicantPhone: document.getElementById('applicantPhone')?.value || '',
+    applicantBirth: document.getElementById('applicantBirth')?.value || '',
+    applicantResidence: document.getElementById('applicantResidence')?.value || '',
+    applicantJob:   document.getElementById('applicantJob')?.value || '',
+    applicantExpYears: document.getElementById('applicantExpYears')?.value || '',
+    applicantExperience: document.getElementById('applicantExperience')?.value || '',
+    // project (step 2)
+    projectTitle:   document.getElementById('projectTitle')?.value || '',
+    projectIdea:    document.getElementById('projectIdea')?.value || '',
+    targetSegments: document.getElementById('targetSegments')?.value || '',
+    placeType:      document.getElementById('placeType')?.value || '',
+    placeStatus:    document.getElementById('placeStatus')?.value || '',
+    projectAddress: document.getElementById('projectAddress')?.value || '',
+    // marketing & sales (step 3)
+    marketingPlan:  document.getElementById('marketingPlan')?.value || '',
+    marketingCost:  document.getElementById('marketingCost')?.value || '0',
+    salesChannels:  document.getElementById('salesChannels')?.value || '',
+    competitors,
     foundingRows,
     products: prods,
     revenueData,
@@ -1525,7 +1745,9 @@ function collectFormData() {
       foundingTotal: document.getElementById('sum_founding').textContent,
       revenueAnnual: document.getElementById('sum_revenue').textContent,
       opsAnnual: document.getElementById('sum_operational').textContent,
+      fixedMonthly: document.getElementById('fin_fixed_m')?.textContent || '$0',
       fixedAnnual: document.getElementById('sum_fixed').textContent,
+      marketing: document.getElementById('sum_marketing')?.textContent || '$0',
       depreciation: document.getElementById('sum_dep').textContent,
       netProfit: document.getElementById('sum_profit').textContent,
       employees: document.getElementById('sum_employees').textContent
@@ -1538,6 +1760,7 @@ function collectFormData() {
 buildProgress();
 // Add initial rows
 addFoundingRow(); addFoundingRow(); addFoundingRow();
+addCompRow();                 // one competitor row to start
 addHRRow();
 addFixedRow({locked:true});   // salary row (auto-filled from HR, locked)
 addFixedRow();
@@ -1595,9 +1818,31 @@ syncSalaryToFixed();
 
   // Fill EVERYTHING immediately so all summary values are correct on open
   setTimeout(() => {
-    if (d.projectIdea)   { const el=document.getElementById('projectIdea');   if(el) el.value=d.projectIdea; }
-    if (d.applicantName) { const el=document.getElementById('applicantName'); if(el) el.value=d.applicantName; }
-    if (d.applicantPhone){ const el=document.getElementById('applicantPhone');if(el) el.value=d.applicantPhone; }
+    const sv = (id,val)=>{ const el=document.getElementById(id); if(el && val!=null) el.value=val; };
+    // applicant (step 1)
+    sv('applicantName', d.applicantName);
+    sv('applicantPhone', d.applicantPhone);
+    sv('applicantBirth', d.applicantBirth);
+    sv('applicantResidence', d.applicantResidence);
+    sv('applicantJob', d.applicantJob);
+    sv('applicantExpYears', d.applicantExpYears);
+    sv('applicantExperience', d.applicantExperience);
+    // project (step 2)
+    sv('projectTitle', d.projectTitle);
+    sv('projectIdea', d.projectIdea);
+    sv('targetSegments', d.targetSegments);
+    sv('placeType', d.placeType);
+    sv('placeStatus', d.placeStatus);
+    sv('projectAddress', d.projectAddress);
+    // marketing & sales (step 3)
+    sv('marketingPlan', d.marketingPlan);
+    sv('marketingCost', d.marketingCost);
+    sv('salesChannels', d.salesChannels);
+    // competitors (≥1 row)
+    document.querySelectorAll('#compBody tr[id^="compr_"]').forEach(r=>r.remove());
+    compRowCount = 0;
+    const comps = (d.competitors||[]).filter(c=>c && (c.name||c.strengths||c.weaknesses));
+    if (comps.length) comps.forEach(c => addCompRow(c)); else addCompRow();
 
     // ── Founding ──
     document.querySelectorAll('[id^="fr_"]').forEach(r=>r.remove());
@@ -1646,13 +1891,14 @@ syncSalaryToFixed();
       calcHRRow(n);
     });
 
-    // ── Fixed (locked salary row + user rows) ──
+    // ── Fixed (locked salary row + user rows; marketing row auto-created) ──
     document.querySelectorAll('[id^="fxr_"]').forEach(r=>r.remove());
     fixedRowCount = 0;
     addFixedRow({locked:true});
     (d.fixedRows||[]).forEach(r => {
       const isSalary = (r.cat==='رواتب') && (String(r.bayan||'').indexOf('الموظفين')>=0 || String(r.notes||'').indexOf('تلقائي')>=0);
-      if (isSalary) return;
+      const isMarketing = (r.cat==='تسويق') || (String(r.bayan||'').indexOf('التسويق')>=0 && String(r.notes||'').indexOf('تلقائي')>=0);
+      if (isSalary || isMarketing) return; // auto rows handled separately
       addFixedRow();
       const n=fixedRowCount;
       const catEl=document.getElementById('fxcat_'+n); if(catEl) catEl.value=r.cat||'';
@@ -1663,6 +1909,7 @@ syncSalaryToFixed();
       calcFixedRow(n);
     });
     syncSalaryToFixed();
+    syncMarketingToFixed();   // recreate the marketing row from the entered cost
 
     // ── Revenue (build table now so the summary is right immediately) ──
     buildRevenueTable(); _revBuiltSig = _productSig();
