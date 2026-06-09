@@ -387,6 +387,18 @@ function buildHeader() {
 }
 
 // ════════════════════════════════════════════════════════════════
+// label/value table in the same visual identity as the summary table
+function lblValTable(title, rows){
+  const W = norm(COLW.summary, TW);
+  return T_([
+    new TableRow({children:[C_(title,{fill:C.DARK_BLUE,bold:true,sz:32,colSpan:2,w:TW,align:AlignmentType.CENTER,color:C.WHITE})]}),
+    ...rows.map(([l,v])=>new TableRow({children:[
+      C_(l,{fill:C.SUM_LBL,bold:true,sz:28,w:W[0],align:AlignmentType.CENTER}),
+      C_(String(v==null?'':v),{fill:C.SUM_VAL,bold:true,sz:28,w:W[1],align:AlignmentType.CENTER}),
+    ]})),
+  ], W);
+}
+
 async function generateWord(data) {
   const pids = Object.keys(data.products||{}).filter(p=>data.products[p]?.name);
   const ch = [];
@@ -430,6 +442,37 @@ async function generateWord(data) {
   }
   // section 1 = title + summary (top-aligned)
   sections.push(mkSec(ch, VerticalAlign.TOP));
+
+  // ══ PAGE 2: الخلاصة المالية ═════════════════════════════
+  {
+    const pm = s => parseFloat(String(s||'0').replace(/[^0-9.-]/g,''))||0;
+    const rv=pm(data.summary?.revenueAnnual), opsA=pm(data.summary?.opsAnnual),
+          fxA=pm(data.summary?.fixedAnnual), ft=pm(data.summary?.foundingTotal),
+          net=pm(data.summary?.netProfit);
+    const payback=(net>0&&ft>0)?ft/net:0, margin=rv>0?net/rv*100:0, roi=ft>0?net/ft*100:0;
+    const f1=x=>{const r=Math.round(x*10)/10;return Number.isInteger(r)?String(r):r.toFixed(1);};
+    page(lblValTable('الخلاصة المالية', [
+      ['الإيرادات السنوية المتوقعة', data.summary?.revenueAnnual||'$0'],
+      ['إجمالي التكاليف التشغيلية السنوية', data.summary?.opsAnnual||'$0'],
+      ['التكاليف الثابتة السنوية', data.summary?.fixedAnnual||'$0'],
+      ['صافي الربح السنوي', data.summary?.netProfit||'$0'],
+      ['إجمالي التكاليف التأسيسية', data.summary?.foundingTotal||'$0'],
+      ['فترة استرداد رأس المال', payback>0 ? (f1(payback)+' سنة') : '—'],
+      ['هامش الربح الصافي', f1(margin)+'%'],
+      ['العائد على الاستثمار', f1(roi)+'%'],
+    ]));
+  }
+
+  // ══ PAGE 3: معلومات مقدّم المشروع ═══════════════════════
+  page(lblValTable('معلومات مقدّم المشروع', [
+    ['اسم مقدم المشروع', data.applicantName||''],
+    ['رقم الهاتف', data.applicantPhone||''],
+    ['تاريخ الميلاد', data.applicantBirth||''],
+    ['مكان الإقامة', data.applicantResidence||''],
+    ['العمل الحالي', data.applicantJob||''],
+    ['عدد سنوات الخبرة', data.applicantExpYears||''],
+    ['الخبرة المرتبطة بالمشروع', data.applicantExperience||''],
+  ]));
 
   // ══ 2. FOUNDING ═════════════════════════════════════════
   if (data.foundingRows?.length) {
@@ -475,6 +518,34 @@ async function generateWord(data) {
       });
     });
     page(T_(prodRows,W));
+  }
+
+  // ══ PAGE 6: التسويق والمبيع ═════════════════════════════
+  {
+    const pm = s => parseFloat(String(s||'0').replace(/[^0-9.-]/g,''))||0;
+    const mkM = pm(data.marketingCost), mkA = mkM*12;
+    const mkTable = lblValTable('التسويق والمبيع', [
+      ['خطة التسويق', data.marketingPlan||'—'],
+      ['كلفة التسويق الشهرية', fM(mkM)],
+      ['كلفة التسويق السنوية', fM(mkA)],
+      ['قنوات المبيع', data.salesChannels||'—'],
+    ]);
+    const comps = (data.competitors||[]).filter(c=>c && (c.name||c.strengths||c.weaknesses));
+    const kids = [mkTable];
+    if (comps.length) {
+      const Wc = norm([900,4200,5144,5144], TW);
+      kids.push(SP(220,20), T_([
+        secHdr('جدول المنافسين',4),
+        colHdr(['#','اسم المنافس','نقاط القوة','نقاط الضعف'],Wc,C.COL_HDR_BLU),
+        ...comps.map((c,i)=>new TableRow({children:[
+          C_(i+1,            {fill:C.NUM_TINT,sz:28,w:Wc[0]}),
+          C_(c.name||'',     {fill:dFill(i),sz:28,w:Wc[1]}),
+          C_(c.strengths||'',{fill:dFill(i),sz:28,w:Wc[2]}),
+          C_(c.weaknesses||'',{fill:dFill(i),sz:28,w:Wc[3]}),
+        ]})),
+      ],Wc));
+    }
+    sections.push(mkSec(kids, VerticalAlign.CENTER));
   }
 
   // ══ 4. REVENUE ══════════════════════════════════════════
