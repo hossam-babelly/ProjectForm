@@ -787,8 +787,8 @@ const TOTAL_STEPS = 11;
 // Dropdown options
 const FOUNDING_CATS = ['آلات','معدات','مركبات','أجهزة حاسوبية','أجهزة موبايل','أخرى'];
 const FIXED_CATS = ['رواتب','وقود','فواتير','منظفات','أخرى'];
-const HR_POSITIONS = ['مدير','عامل','قائد فريق الطبخ','قائد فريق التوزيع','أخرى'];
-const HR_TYPES = ['إداري','تنفيذي','مزود خدمة','أخرى'];
+const HR_POSITIONS = ['مدير','عامل','قائد فريق الطبخ','قائد فريق التوزيع'];
+const HR_TYPES = ['إداري','تنفيذي','مزود خدمة'];
 
 let extraFoundingCats = [];
 let extraFixedCats = [];
@@ -886,15 +886,31 @@ function delCompRow(n) {
 }
 
 // ─── MARKETING COST → locked fixed-cost row ─────────────
+function renumberFixed() {
+  let i = 0;
+  document.querySelectorAll('#fixedBody tr[id^="fxr_"]').forEach(tr => {
+    i++;
+    if (tr.cells[0]) tr.cells[0].textContent = i;
+  });
+}
+
 function syncMarketingToFixed() {
   const amt = parseFloat(document.getElementById('marketingCost')?.value) || 0;
   let row = document.querySelector('#fixedBody tr[data-marketing="1"]');
-  if (amt <= 0) { if (row) { row.remove(); calcFixedMonthlyTotal(); updateSummary(); } return; }
-  if (!row) { addFixedRow({marketing:true}); row = document.querySelector('#fixedBody tr[data-marketing="1"]'); }
+  if (amt <= 0) { if (row) { row.remove(); renumberFixed(); calcFixedMonthlyTotal(); updateSummary(); } return; }
+  if (!row) {
+    addFixedRow({marketing:true});
+    row = document.querySelector('#fixedBody tr[data-marketing="1"]');
+    // place the marketing row right after the salary row (2nd position)
+    const salaryRow = document.querySelector('#fixedBody tr[data-salary="1"]');
+    if (salaryRow && row) salaryRow.parentNode.insertBefore(row, salaryRow.nextSibling);
+    else if (row) row.parentNode.insertBefore(row, row.parentNode.firstChild);
+  }
   const n = row.id.replace('fxr_','');
   const p=document.getElementById('fxprice_'+n); if(p) p.value=amt;
   const q=document.getElementById('fxqty_'+n); if(q) q.value=1;
   const t=document.getElementById('fxtotal_'+n); if(t) t.value=fmtMoney(amt);
+  renumberFixed();
   calcFixedMonthlyTotal();
   updateSummary();
 }
@@ -1288,6 +1304,7 @@ function addFixedRow(opts={}) {
     `;
   }
   tbody.appendChild(tr);
+  renumberFixed();
 }
 
 function handleFixedCat(sel) {
@@ -1325,6 +1342,7 @@ function delFixedRow(n) {
   const tr = document.getElementById('fxr_'+n);
   if (tr && (tr.dataset.salary === '1' || tr.dataset.marketing === '1')) return; // auto rows are locked
   tr?.remove();
+  renumberFixed();
   calcFixedMonthlyTotal();
   updateSummary();
 }
@@ -1396,8 +1414,8 @@ function addHRRow() {
   const tr = document.createElement('tr');
   tr.id = `hrr_${n}`;
 
-  const posOpts = `<option value="" selected>— اختر —</option>` + [...HR_POSITIONS,...extraHRPositions].map(p=>`<option>${p}</option>`).join('') + `<option value="__other__">أخرى</option>`;
-  const typeOpts = `<option value="" selected>— اختر —</option>` + [...HR_TYPES,...extraHRTypes].map(t=>`<option>${t}</option>`).join('') + `<option value="__other__">أخرى</option>`;
+  const posOpts = `<option value="" selected>— اختر —</option>` + [...HR_POSITIONS,...extraHRPositions].map(p=>`<option>${p}</option>`).join('') + `<option value="__other__">أخرى…</option>`;
+  const typeOpts = `<option value="" selected>— اختر —</option>` + [...HR_TYPES,...extraHRTypes].map(t=>`<option>${t}</option>`).join('') + `<option value="__other__">أخرى…</option>`;
   const reportsTo = getHRPositions();
   const reportsOpts = `<option value="">—</option>` + reportsTo.map(p=>`<option>${p}</option>`).join('');
   let monthsOpts = '';
@@ -1426,17 +1444,59 @@ function getHRPositions() {
   return pos;
 }
 
+function rebuildHRPositionOptions() {
+  document.querySelectorAll('[id^="hrpos_"]').forEach(sel => {
+    const cur = sel.value === '__other__' ? '' : sel.value;
+    sel.innerHTML = `<option value="">— اختر —</option>` +
+      [...HR_POSITIONS, ...extraHRPositions].map(p=>`<option>${p}</option>`).join('') +
+      `<option value="__other__">أخرى…</option>`;
+    sel.value = cur;
+  });
+}
+function rebuildHRTypeOptions() {
+  document.querySelectorAll('[id^="hrtype_"]').forEach(sel => {
+    const cur = sel.value === '__other__' ? '' : sel.value;
+    sel.innerHTML = `<option value="">— اختر —</option>` +
+      [...HR_TYPES, ...extraHRTypes].map(t=>`<option>${t}</option>`).join('') +
+      `<option value="__other__">أخرى…</option>`;
+    sel.value = cur;
+  });
+}
+function refreshReportsOptions() {
+  const positions = getHRPositions();
+  document.querySelectorAll('[id^="hrreports_"]').forEach(sel => {
+    const cur = sel.value;
+    sel.innerHTML = `<option value="">—</option>` + positions.map(p=>`<option>${p}</option>`).join('');
+    if (positions.includes(cur)) sel.value = cur;
+  });
+}
+
 function handleHRPos(sel, n) {
   if(sel.value === '__other__') {
-    const val = prompt('أدخل المنصب الجديد:');
-    if(val && !extraHRPositions.includes(val)) extraHRPositions.push(val);
+    const val = (prompt('أدخل المنصب الجديد:')||'').trim();
+    if(val) {
+      if(!extraHRPositions.includes(val)) extraHRPositions.push(val);
+      rebuildHRPositionOptions();
+      sel.value = val;
+    } else {
+      sel.value = '';
+    }
   }
+  refreshReportsOptions();
+  buildOrgChart();
 }
-function handleHRType(sel) {
+function handleHRType(sel, n) {
   if(sel.value === '__other__') {
-    const val = prompt('أدخل النوع الجديد:');
-    if(val && !extraHRTypes.includes(val)) extraHRTypes.push(val);
+    const val = (prompt('أدخل النوع الجديد:')||'').trim();
+    if(val) {
+      if(!extraHRTypes.includes(val)) extraHRTypes.push(val);
+      rebuildHRTypeOptions();
+      sel.value = val;
+    } else {
+      sel.value = '';
+    }
   }
+  buildOrgChart();
 }
 
 function calcHRRow(n) {
