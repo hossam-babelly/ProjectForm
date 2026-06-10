@@ -606,6 +606,10 @@ async function generateWord(data) {
       C_('الإجمالي',{fill:C.COL_HDR_BLK,bold:true,sz:28,colSpan:2,w:W[0]+W[1],align:AlignmentType.CENTER}),
       ...mTots.map((v,m)=>C_(v,{fill:C.COL_HDR_BLK,bold:true,sz:28,w:W[m+2]})),
     ]}));
+    const revAnnual = MONTHS.reduce((a,_,m)=>{let t=0;pids.forEach(pid=>{t+=parseFloat(String(data.revenueData?.[pid]?.[m]?.total||'0').replace(/[^0-9.-]/g,''))||0;});return a+t;},0);
+    revRows.push(new TableRow({children:[
+      C_('إجمالي الإيرادات السنوية:  '+fM(revAnnual),{fill:C.DARK_BLUE,bold:true,sz:30,colSpan:14,w:TW,align:AlignmentType.CENTER,color:C.WHITE}),
+    ]}));
     S.revenue = page(T_(revRows,W));
   }
 
@@ -645,6 +649,10 @@ async function generateWord(data) {
     opsRows.push(new TableRow({children:[
       C_('الإجمالي',{fill:C.COL_HDR_BLK,bold:true,sz:28,colSpan:3,w:W[0]+W[1]+W[2],align:AlignmentType.CENTER}),
       ...opsTots.map((v,m)=>C_(v,{fill:C.COL_HDR_BLK,bold:true,sz:28,w:W[m+3]})),
+    ]}));
+    const opsAnnual = MONTHS.reduce((a,_,m)=>{let t=0;pids.forEach(pid=>{t+=parseFloat(String(data.opsData?.[pid]?.[`sub_${m}`]||'0').replace(/[^0-9.-]/g,''))||0;});return a+t;},0);
+    opsRows.push(new TableRow({children:[
+      C_('إجمالي التكاليف التشغيلية السنوية:  '+fM(opsAnnual),{fill:C.DARK_BLUE,bold:true,sz:30,colSpan:15,w:TW,align:AlignmentType.CENTER,color:C.WHITE}),
     ]}));
     S.ops = page(T_(opsRows,W));
   }
@@ -1038,10 +1046,11 @@ function buildFinanceDashXml(summary){
   const PW=16838*635, MX=600000, CW=PW-2*MX, gap=170000;
   _fwz=7000; let s='';
   // 1) KPI cards
-  const cw=(CW-3*gap)/4, ch=940000, top=1230000;
+  const cw=(CW-4*gap)/5, ch=940000, top=1230000;
   const cards=[['الإيرادات السنوية',summary.revenueAnnual||'$0'],['التكاليف التشغيلية',summary.opsAnnual||'$0'],
-               ['التكاليف الثابتة',summary.fixedAnnual||'$0'],['التكاليف التأسيسية',summary.foundingTotal||'$0']];
-  cards.forEach((c,i)=>{ s+=fwRect(MX+i*(cw+gap),top,cw,ch,FW.card,[{text:c[0],sz:18,bold:false,color:FW.muted},{text:c[1],sz:32,bold:true,color:FW.navy}],{radius:14000}); });
+               ['التكاليف الثابتة',summary.fixedAnnual||'$0'],['التكاليف التأسيسية',summary.foundingTotal||'$0'],
+               ['الاهتلاك السنوي',summary.depreciation||'$0']];
+  cards.forEach((c,i)=>{ s+=fwRect(MX+i*(cw+gap),top,cw,ch,FW.card,[{text:c[0],sz:17,bold:false,color:FW.muted},{text:c[1],sz:28,bold:true,color:FW.navy}],{radius:14000}); });
   // 2) net profit wide card
   const ny=top+ch+gap, nh=690000;
   s+=fwRect(MX,ny,CW,nh,FW.navy,[{text:'صافي الربح السنوي',sz:19,bold:false,color:FW.netLbl},{text:summary.netProfit||'$0',sz:40,bold:true,color:FW.orange}],{radius:14000});
