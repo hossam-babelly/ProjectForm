@@ -278,9 +278,14 @@ async function generateExcel(data) {
     ws.mergeCells(payRow,2,payRow,3); const pv=ws.getCell(payRow,2); pv.value={formula:phrase};
     pv.font={bold:true,name:F,size:13,color:{argb:FORMULA}}; pv.fill=fill(SUMVAL); pv.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; pv.border=thin(); ws.getRow(payRow).height=24; R++;
     [5,6,7,8].forEach(c=>ws.getColumn(c).hidden=true);
-    const marRow=kv('هامش الربح الصافي',{formula:`IF(${rev}>0,${netRef}/${rev},0)`},{numFmt:PCT,color:FORMULA});
-    const roiRow=kv('العائد على الاستثمار',{formula:`IF(${fnd}>0,${netRef}/${fnd},0)`},{numFmt:PCT,color:FORMULA});
-    [marRow,roiRow].forEach(rr=>{ try{ ws.addConditionalFormatting({ref:`B${rr}`,rules:[{type:'iconSet',iconSet:'5Quarters',reverse:false,showValue:true,cfvo:[{type:'num',value:0},{type:'num',value:0.2},{type:'num',value:0.4},{type:'num',value:0.6},{type:'num',value:0.8}]}]}); }catch(e){} });
+    const kvPct=(label,formula)=>{
+      const l=ws.getCell(R,1); l.value=label; l.font={bold:true,name:F,size:12,color:{argb:NAVY}}; l.fill=fill(SUMLBL); l.alignment={horizontal:'center',vertical:'middle',readingOrder:2,wrapText:true}; l.border=thin();
+      const v=ws.getCell(R,2); v.value=formula; v.numFmt=PCT; v.font={bold:true,name:F,size:13,color:{argb:FORMULA}}; v.fill=fill(SUMVAL); v.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; v.border=thin();
+      const g=ws.getCell(R,3); g.value=formula; g.numFmt=PCT; g.font={name:F,size:11,color:{argb:FORMULA}}; g.fill=fill(SUMVAL); g.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; g.border=thin();
+      try{ ws.addConditionalFormatting({ref:`C${R}`,rules:[{type:'iconSet',iconSet:'5Quarters',reverse:false,showValue:false,cfvo:[{type:'num',value:0},{type:'num',value:0.2},{type:'num',value:0.4},{type:'num',value:0.6},{type:'num',value:0.8}]}]}); }catch(e){}
+      ws.getRow(R).height=24; const rr=R; R++; return rr; };
+    const marRow=kvPct('هامش الربح الصافي',{formula:`IF(${rev}>0,${netRef}/${rev},0)`});
+    const roiRow=kvPct('العائد على الاستثمار',{formula:`IF(${fnd}>0,${netRef}/${fnd},0)`});
     R++;
     ws.mergeCells(R,1,R,3); const bh=ws.getCell(R,1); bh.value='مقارنة الإيرادات والتكاليف والربح'; bh.font={bold:true,color:{argb:WHITE},name:F,size:13}; bh.fill=fill(NAVY); bh.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; ws.getRow(R).height=26; R++;
     const barStart=R;
@@ -484,9 +489,9 @@ async function generateWord(data) {
   // ══ الخلاصة المالية السنوية (لوحة بصرية محقونة) + عدد الموظفين ══
   S.summary = mkSec([
     new Paragraph({bidirectional:true, alignment:AlignmentType.CENTER, spacing:{before:120,after:0},
-      children:[new TextRun({text:'الخلاصة المالية السنوية', bold:true, size:36, font:FONT, color:C.DARK_BLUE})]}),
+      children:[new TextRun({text:'الخلاصة المالية السنوية', bold:true, size:42, font:FONT, color:C.DARK_BLUE})]}),
     new Paragraph({bidirectional:true, alignment:AlignmentType.CENTER, spacing:{before:60,after:120},
-      children:[new TextRun({text:`عدد الموظفين في المشروع: ${String(data.summary?.employees||'0')}`, bold:true, size:26, font:FONT, color:C.TITLE_ORANGE})]}),
+      children:[new TextRun({text:`عدد الموظفين في المشروع: ${String(data.summary?.employees||'0')}`, bold:true, size:30, font:FONT, color:C.TITLE_ORANGE})]}),
     new Paragraph({bidirectional:true, alignment:AlignmentType.CENTER, spacing:{before:0,after:0},
       children:[new TextRun({text:'[[FINANCE]]', size:2, font:FONT, color:'FFFFFF'})]}),
   ], VerticalAlign.TOP);
@@ -601,7 +606,7 @@ async function generateWord(data) {
         ...MONTHS.map((_,m)=>C_(fN(rev[m]?.total||0),{fill:m%2===0?pc.mo:pc.me,sz:28,w:W[m+2]})),
       ]}));
     });
-    const mTots = MONTHS.map((_,m)=>{let t=0;pids.forEach(pid=>{t+=parseFloat(String(data.revenueData?.[pid]?.[m]?.total||'0').replace(/[^0-9.-]/g,''))||0;});return fM(t);});
+    const mTots = MONTHS.map((_,m)=>{let t=0;pids.forEach(pid=>{t+=parseFloat(String(data.revenueData?.[pid]?.[m]?.total||'0').replace(/[^0-9.-]/g,''))||0;});return '\u200F'+fM(t);});
     revRows.push(new TableRow({children:[
       C_('الإجمالي',{fill:C.COL_HDR_BLK,bold:true,sz:28,colSpan:2,w:W[0]+W[1],align:AlignmentType.CENTER}),
       ...mTots.map((v,m)=>C_(v,{fill:C.COL_HDR_BLK,bold:true,sz:28,w:W[m+2]})),
@@ -645,7 +650,7 @@ async function generateWord(data) {
         ...subVals.map((v,m)=>C_(v,{fill:C.SUBTOT,bold:true,sz:28,w:W[m+3]})),
       ]}));
     });
-    const opsTots=MONTHS.map((_,m)=>{let t=0;pids.forEach(pid=>{t+=parseFloat(String(data.opsData?.[pid]?.[`sub_${m}`]||'0').replace(/[^0-9.-]/g,''))||0;});return fM(t);});
+    const opsTots=MONTHS.map((_,m)=>{let t=0;pids.forEach(pid=>{t+=parseFloat(String(data.opsData?.[pid]?.[`sub_${m}`]||'0').replace(/[^0-9.-]/g,''))||0;});return '\u200F'+fM(t);});
     opsRows.push(new TableRow({children:[
       C_('الإجمالي',{fill:C.COL_HDR_BLK,bold:true,sz:28,colSpan:3,w:W[0]+W[1]+W[2],align:AlignmentType.CENTER}),
       ...opsTots.map((v,m)=>C_(v,{fill:C.COL_HDR_BLK,bold:true,sz:28,w:W[m+3]})),
@@ -1046,26 +1051,26 @@ function buildFinanceDashXml(summary){
   const PW=16838*635, MX=600000, CW=PW-2*MX, gap=170000;
   _fwz=7000; let s='';
   // 1) KPI cards
-  const cw=(CW-4*gap)/5, ch=940000, top=1230000;
+  const cw=(CW-4*gap)/5, ch=1080000, top=1230000;
   const cards=[['الإيرادات السنوية',summary.revenueAnnual||'$0'],['التكاليف التشغيلية',summary.opsAnnual||'$0'],
-               ['التكاليف الثابتة',summary.fixedAnnual||'$0'],['التكاليف التأسيسية',summary.foundingTotal||'$0'],
-               ['الاهتلاك السنوي',summary.depreciation||'$0']];
-  cards.forEach((c,i)=>{ s+=fwRect(MX+i*(cw+gap),top,cw,ch,FW.card,[{text:c[0],sz:17,bold:false,color:FW.muted},{text:c[1],sz:28,bold:true,color:FW.navy}],{radius:14000}); });
+               ['التكاليف الثابتة',summary.fixedAnnual||'$0'],['الاهتلاك السنوي',summary.depreciation||'$0'],
+               ['التكاليف التأسيسية',summary.foundingTotal||'$0']];
+  cards.forEach((c,i)=>{ s+=fwRect(MX+i*(cw+gap),top,cw,ch,FW.card,[{text:c[0],sz:22,bold:false,color:FW.muted},{text:c[1],sz:32,bold:true,color:FW.navy}],{radius:14000}); });
   // 2) net profit wide card
-  const ny=top+ch+gap, nh=690000;
-  s+=fwRect(MX,ny,CW,nh,FW.navy,[{text:'صافي الربح السنوي',sz:19,bold:false,color:FW.netLbl},{text:summary.netProfit||'$0',sz:40,bold:true,color:FW.orange}],{radius:14000});
+  const ny=top+ch+gap, nh=820000;
+  s+=fwRect(MX,ny,CW,nh,FW.navy,[{text:'صافي الربح السنوي',sz:24,bold:false,color:FW.netLbl},{text:summary.netProfit||'$0',sz:48,bold:true,color:FW.orange}],{radius:14000});
   // 3) payback card + two donut gauges
   const by=ny+nh+gap, bw=(CW-2*gap)/3, bh=1380000;
-  s+=fwRect(MX,by,bw,bh,FW.card,[{text:'فترة استرداد رأس المال',sz:18,bold:false,color:FW.muted},{text:payback,sz:26,bold:true,color:FW.navy}],{radius:14000});
+  s+=fwRect(MX,by,bw,bh,FW.card,[{text:'فترة استرداد رأس المال',sz:24,bold:false,color:FW.muted},{text:payback,sz:34,bold:true,color:FW.navy}],{radius:14000});
   s+=fwRect(MX+bw+gap,by,bw,bh,'FFFFFF',null,{line:FW.track,radius:14000});
   s+=fwRing(MX+bw+gap+bw/2, by+bh/2, 560000, margin, FW.blue, 'هامش الربح', f1(margin)+'%');
   s+=fwRect(MX+2*(bw+gap),by,bw,bh,'FFFFFF',null,{line:FW.track,radius:14000});
   s+=fwRing(MX+2*(bw+gap)+bw/2, by+bh/2, 560000, roi, FW.orange, 'العائد على الاستثمار', f1(roi)+'%');
   // 4) comparison bars (revenue / costs / profit) scaled to revenue
-  const cy0=by+bh+gap, rowH=270000, rowGap=120000, labW=CW*0.26, barX=MX+CW*0.30, barW=CW*0.66;
+  const cy0=by+bh+gap, rowH=300000, rowGap=120000, labW=CW*0.26, barX=MX+CW*0.30, barW=CW*0.66;
   const rows=[['الإيرادات',100,FW.blue],['التكاليف',costsPct,FW.gray],['صافي الربح',profitPct,FW.green]];
   rows.forEach((r,i)=>{ const yy=cy0+i*(rowH+rowGap);
-    s+=fwRect(MX,yy-30000,labW,rowH+60000,'none',[{text:r[0],sz:19,bold:false,color:FW.muted}]);
+    s+=fwRect(MX,yy-30000,labW,rowH+60000,'none',[{text:r[0],sz:26,bold:false,color:FW.muted}]);
     s+=fwBar(barX,yy,barW,rowH,r[1],r[2]); });
   return `<w:p><w:pPr><w:spacing w:after="0"/></w:pPr>${s}</w:p>`;
 }
