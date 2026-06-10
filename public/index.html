@@ -755,7 +755,7 @@
           <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center">
             <div style="font-size:13px;color:#64748b;margin-bottom:10px">فترة استرداد رأس المال</div>
             <div style="font-size:40px">⏳</div>
-            <div style="margin-top:6px"><span style="font-size:22px;font-weight:800;color:#1F3864" id="fin_payback">—</span></div>
+            <div style="margin-top:6px"><span dir="rtl" style="font-size:22px;font-weight:800;color:#1F3864;direction:rtl" id="fin_payback">—</span></div>
           </div>
           <!-- net margin gauge -->
           <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;text-align:center">
@@ -944,8 +944,9 @@ function paybackPhrase(years){
   const total=Math.ceil(years*12); const y=Math.floor(total/12), m=total%12;
   const yw = y===0?'':(y+(y===1?' سنة':(y<=10?' سنوات':' سنة')));
   const mw = m===0?'':(m+(m===1?' شهر':(m<=10?' أشهر':' شهر')));
-  if(!yw && !mw) return 'أقل من شهر';
-  return (yw&&mw)?(yw+' و'+mw):(yw||mw);
+  if(!yw && !mw) return '\u200Fأقل من شهر';
+  const out = (yw&&mw)?(yw+' و'+mw):(yw||mw);
+  return '\u200F'+out;
 }
 function updateSummary() {
   const set = (id,val) => { const el=document.getElementById(id); if(el) el.textContent=val; };

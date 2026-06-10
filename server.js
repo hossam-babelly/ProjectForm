@@ -105,18 +105,20 @@ async function generateExcel(data) {
     v.fill=fill(SUMVAL); v.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; v.border=thin();
     ws.getRow(rowIdx).height=24; }
 
-  const SN={app:'معلومات المقدّم',sum:'الخلاصة المالية',found:'التكاليف التأسيسية',prod:'المنتجات',
+  const SN={app:'معلومات المقدّم',proj:'معلومات المشروع',org:'الهيكل التنظيمي',sum:'الخلاصة المالية السنوية',found:'التكاليف التأسيسية',prod:'المنتجات',
     mkt:'التسويق والمبيع',rev:'الإيرادات',ops:'التكاليف التشغيلية',hr:'الموارد البشرية',fixed:'التكاليف الثابتة',dep:'الاهتلاك'};
   const wsApp=wb.addWorksheet(SN.app,{views:[{rightToLeft:true}]});
-  const wsSum=wb.addWorksheet(SN.sum,{views:[{rightToLeft:true}]});
+  const wsProj=wb.addWorksheet(SN.proj,{views:[{rightToLeft:true}]});
+  const wsMkt=wb.addWorksheet(SN.mkt,{views:[{rightToLeft:true}]});
   const wsFound=wb.addWorksheet(SN.found,{views:[{rightToLeft:true}]});
   const wsProd=wb.addWorksheet(SN.prod,{views:[{rightToLeft:true}]});
-  const wsMkt=wb.addWorksheet(SN.mkt,{views:[{rightToLeft:true}]});
   const wsRev=wb.addWorksheet(SN.rev,{views:[{rightToLeft:true}]});
   const wsOps=wb.addWorksheet(SN.ops,{views:[{rightToLeft:true}]});
   const wsHR=wb.addWorksheet(SN.hr,{views:[{rightToLeft:true}]});
+  const wsOrg=wb.addWorksheet(SN.org,{views:[{rightToLeft:true}]});
   const wsFixed=wb.addWorksheet(SN.fixed,{views:[{rightToLeft:true}]});
   const wsDep=wb.addWorksheet(SN.dep,{views:[{rightToLeft:true}]});
+  const wsSum=wb.addWorksheet(SN.sum,{views:[{rightToLeft:true}]});
 
   const refs={}; const revQtyRow={};
 
@@ -142,10 +144,9 @@ async function generateExcel(data) {
       dcell(ws,R,7,pm(r.qty),{color:INPUT,bg:sbg}); dcell(ws,R,8,{formula:`E${R}*G${R}`},{numFmt:MONEY,bg:sbg}); });
     const tr=4+rows.length;
     totalRow(ws,tr,1,7,'إجمالي الرواتب (سنوياً)',8, rows.length?{formula:`SUMPRODUCT(E4:E${tr-1},G4:G${tr-1},F4:F${tr-1})`}:0);
-    refs.hrAnnual=`${Q(SN.hr)}!$H$${tr}`;
-    const ocR=tr+2; ws.mergeCells(ocR,1,ocR,8); const oc=ws.getCell(ocR,1);
-    oc.value='الهيكل التنظيمي'; oc.font={bold:true,color:{argb:WHITE},name:F,size:14}; oc.fill=fill(NAVY);
-    oc.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; ws.getRow(ocR).height=30; }
+    refs.hrAnnual=`${Q(SN.hr)}!$H$${tr}`; }
+
+  { const ws=wsOrg; band(ws,8,'الهيكل التنظيمي'); [6,20,16,18,18,15,9,20].forEach((w,i)=>ws.getColumn(i+1).width=w); }
 
   // MARKETING
   { const ws=wsMkt; band(ws,4,'التسويق والمبيع'); ws.columns=[{width:24},{width:28},{width:28},{width:28}];
@@ -247,7 +248,7 @@ async function generateExcel(data) {
 
   // FINANCIAL SUMMARY
   { const ws=wsSum; ws.columns=[{width:34},{width:24},{width:30},{width:3},{width:10},{width:10},{width:8},{width:8}];
-    band(ws,3,'الخلاصة المالية','ملخّص ديناميكي — يتحدّث تلقائياً عند تعديل أي مُدخل');
+    band(ws,3,'الخلاصة المالية السنوية','ملخّص ديناميكي — يتحدّث تلقائياً عند تعديل أي مُدخل');
     let R=3;
     const kv=(label,formula,o)=>{ o=o||{}; const numFmt=o.numFmt||MONEY0, color=o.color||LINK, big=o.big;
       const l=ws.getCell(R,1); l.value=label; l.font={bold:true,name:F,size:big?13:12,color:{argb:NAVY}}; l.fill=fill(SUMLBL); l.alignment={horizontal:'center',vertical:'middle',readingOrder:2,wrapText:true}; l.border=thin();
@@ -260,6 +261,7 @@ async function generateExcel(data) {
     kv('التكاليف الثابتة السنوية',{formula:`=${refs.fixedAnnual}`});
     kv('إجمالي التكاليف التأسيسية',{formula:`=${refs.founding}`});
     kv('الاهتلاك السنوي',{formula:`=${refs.depTotal}`});
+    kv('عدد الموظفين في المشروع', Number(data.summary?.employees||0), {numFmt:'0', color:FORMULA});
     const rev=refs.revAnnual, ops=refs.opsAnnual, fix=refs.fixedAnnual, fnd=refs.founding, dep=refs.depTotal;
     const netRow=kv('صافي الربح السنوي',{formula:`${rev}-${ops}-${fix}-${dep}`},{numFmt:MONEY0,big:true});
     const netRef=`B${netRow}`;
@@ -298,8 +300,12 @@ async function generateExcel(data) {
       const v=ws.getCell(R,2); v.value=val||''; v.font={name:F,size:12,color:{argb:FORMULA}}; v.fill=fill(SUMVAL); v.alignment={horizontal:'center',vertical:'middle',readingOrder:2,wrapText:true}; v.border=thin(); ws.getRow(R).height=24; R++; };
     lv('اسم مقدم المشروع',data.applicantName); lv('رقم الهاتف',data.applicantPhone); lv('تاريخ الميلاد',data.applicantBirth);
     lv('مكان الإقامة',data.applicantResidence); lv('العمل الحالي',data.applicantJob); lv('عدد سنوات الخبرة',data.applicantExpYears);
-    lv('الخبرة المرتبطة بالمشروع',data.applicantExperience);
-    R++; ws.mergeCells(R,1,R,2); const h=ws.getCell(R,1); h.value='تفاصيل المشروع'; h.font={bold:true,color:{argb:WHITE},name:F,size:13}; h.fill=fill(NAVY); h.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; ws.getRow(R).height=26; R++;
+    lv('الخبرة المرتبطة بالمشروع',data.applicantExperience); }
+
+  { const ws=wsProj; ws.columns=[{width:30},{width:48}]; band(ws,2,'معلومات المشروع');
+    let R=3;
+    const lv=(label,val)=>{ const l=ws.getCell(R,1); l.value=label; l.font={bold:true,name:F,size:12,color:{argb:NAVY}}; l.fill=fill(SUMLBL); l.alignment={horizontal:'center',vertical:'middle',readingOrder:2,wrapText:true}; l.border=thin();
+      const v=ws.getCell(R,2); v.value=val||''; v.font={name:F,size:12,color:{argb:FORMULA}}; v.fill=fill(SUMVAL); v.alignment={horizontal:'center',vertical:'middle',readingOrder:2,wrapText:true}; v.border=thin(); ws.getRow(R).height=24; R++; };
     lv('عنوان المشروع',data.projectTitle); lv('فكرة المشروع',data.projectIdea); lv('الشرائح المستهدفة',data.targetSegments);
     lv('نوع المكان المقترح',data.placeType); lv('وضع المكان',data.placeStatus); lv('عنوان / موقع المشروع',data.projectAddress); }
 
@@ -462,43 +468,31 @@ async function generateWord(data) {
   const sections = [];
   const mkSec = (children, valign=VerticalAlign.CENTER) =>
     ({ properties:{ page:PAGE, verticalAlign:valign }, headers:{default:buildHeader()}, children });
-  const page = (...tbls)=>{ sections.push(mkSec(tbls, VerticalAlign.CENTER)); };
+  const S = {};
+  const page = (...tbls)=> mkSec(tbls, VerticalAlign.CENTER);
 
-  // ══ 1. SUMMARY ══════════════════════════════════════════
-  {
-    const W = norm(COLW.summary,TW);
-    ch.push(T_([
-      new TableRow({children:[C_('ملخص معلومات المشروع',{fill:C.DARK_BLUE,bold:true,sz:32,colSpan:2,w:TW,align:AlignmentType.CENTER,color:C.WHITE})]}),
-      ...[
-        ['فكرة المشروع',data.projectIdea||''],
-        ['اسم مقدم المشروع',data.applicantName||''],
-        ['رقم الهاتف',data.applicantPhone||''],
-        ['إجمالي التكاليف التأسيسية',data.summary?.foundingTotal||'$0'],
-        ['إجمالي الإيرادات المتوقعة (سنوياً)',data.summary?.revenueAnnual||'$0'],
-        ['إجمالي التكاليف التشغيلية (سنوياً)',data.summary?.opsAnnual||'$0'],
-        ['إجمالي التكاليف الثابتة (سنوياً)',data.summary?.fixedAnnual||'$0'],
-        ['الاهتلاك (سنوياً)',data.summary?.depreciation||'$0'],
-        ['الربح الصافي (سنوياً)',data.summary?.netProfit||'$0'],
-        ['عدد الموظفين في المشروع',String(data.summary?.employees||'0')],
-      ].map(([l,v])=>new TableRow({children:[
-        C_(l,{fill:C.SUM_LBL,bold:true,sz:28,w:W[0],align:AlignmentType.CENTER}),
-        C_(v,{fill:C.SUM_VAL,bold:true,sz:28,w:W[1],align:AlignmentType.CENTER}),
-      ]})),
-    ],W));
-  }
-  // section 1 = title + summary (top-aligned)
-  sections.push(mkSec(ch, VerticalAlign.TOP));
+  // ══ معلومات المشروع (حقول صفحة تفاصيل المشروع فقط) ══
+  S.project = page(lblValTable('معلومات المشروع', [
+    ['عنوان المشروع', data.projectTitle||''],
+    ['فكرة المشروع', data.projectIdea||''],
+    ['الشرائح المستهدفة', data.targetSegments||''],
+    ['نوع المكان المقترح', data.placeType||''],
+    ['وضع المكان', data.placeStatus||''],
+    ['عنوان / موقع المشروع', data.projectAddress||''],
+  ]));
 
-  // ══ PAGE 2: الخلاصة المالية (visual dashboard, injected) ═══
-  sections.push(mkSec([
+  // ══ الخلاصة المالية السنوية (لوحة بصرية محقونة) + عدد الموظفين ══
+  S.summary = mkSec([
     new Paragraph({bidirectional:true, alignment:AlignmentType.CENTER, spacing:{before:120,after:0},
-      children:[new TextRun({text:'الخلاصة المالية', bold:true, size:36, font:FONT, color:C.DARK_BLUE})]}),
+      children:[new TextRun({text:'الخلاصة المالية السنوية', bold:true, size:36, font:FONT, color:C.DARK_BLUE})]}),
+    new Paragraph({bidirectional:true, alignment:AlignmentType.CENTER, spacing:{before:60,after:120},
+      children:[new TextRun({text:`عدد الموظفين في المشروع: ${String(data.summary?.employees||'0')}`, bold:true, size:26, font:FONT, color:C.TITLE_ORANGE})]}),
     new Paragraph({bidirectional:true, alignment:AlignmentType.CENTER, spacing:{before:0,after:0},
       children:[new TextRun({text:'[[FINANCE]]', size:2, font:FONT, color:'FFFFFF'})]}),
-  ], VerticalAlign.TOP));
+  ], VerticalAlign.TOP);
 
-  // ══ PAGE 3: معلومات مقدّم المشروع ═══════════════════════
-  page(lblValTable('معلومات مقدّم المشروع', [
+  // ══ معلومات مقدّم المشروع ══
+  S.applicant = page(lblValTable('معلومات مقدّم المشروع', [
     ['اسم مقدم المشروع', data.applicantName||''],
     ['رقم الهاتف', data.applicantPhone||''],
     ['تاريخ الميلاد', data.applicantBirth||''],
@@ -512,7 +506,7 @@ async function generateWord(data) {
   if (data.foundingRows?.length) {
     const W = norm(COLW.founding,TW);
     let tot=0; data.foundingRows.forEach(r=>{tot+=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0;});
-    page(T_([
+    S.founding = page(T_([
       secHdr('التكاليف التأسيسية',8),
       colHdr(['#','الصنف','البيان','الاهتلاك','ملاحظات','التكلفة للواحدة','العدد','التكلفة الإجمالية'],W,C.COL_HDR_BLU),
       ...data.foundingRows.map((r,i)=>new TableRow({children:[
@@ -551,7 +545,7 @@ async function generateWord(data) {
         }
       });
     });
-    page(T_(prodRows,W));
+    S.products = page(T_(prodRows,W));
   }
 
   // ══ PAGE 6: التسويق والمبيع ═════════════════════════════
@@ -579,7 +573,7 @@ async function generateWord(data) {
         ]})),
       ],Wc));
     }
-    sections.push(mkSec(kids, VerticalAlign.CENTER));
+    S.mkt = mkSec(kids, VerticalAlign.CENTER);
   }
 
   // ══ 4. REVENUE ══════════════════════════════════════════
@@ -612,7 +606,7 @@ async function generateWord(data) {
       C_('الإجمالي',{fill:C.COL_HDR_BLK,bold:true,sz:28,colSpan:2,w:W[0]+W[1],align:AlignmentType.CENTER}),
       ...mTots.map((v,m)=>C_(v,{fill:C.COL_HDR_BLK,bold:true,sz:28,w:W[m+2]})),
     ]}));
-    page(T_(revRows,W));
+    S.revenue = page(T_(revRows,W));
   }
 
   // ══ 5. OPS ══════════════════════════════════════════════
@@ -652,7 +646,7 @@ async function generateWord(data) {
       C_('الإجمالي',{fill:C.COL_HDR_BLK,bold:true,sz:28,colSpan:3,w:W[0]+W[1]+W[2],align:AlignmentType.CENTER}),
       ...opsTots.map((v,m)=>C_(v,{fill:C.COL_HDR_BLK,bold:true,sz:28,w:W[m+3]})),
     ]}));
-    page(T_(opsRows,W));
+    S.ops = page(T_(opsRows,W));
   }
 
   // ══ 6. HR ════════════════════════════════════════════════
@@ -664,7 +658,7 @@ async function generateWord(data) {
       const mo=parseFloat(r.months)||12;
       tot += q*s*mo;
     });
-    page(T_([
+    S.hr = page(T_([
       secHdr('الموارد البشرية',8),
       colHdr(['#','المنصب','النوع','تابع لـ','الراتب الشهري الفردي','عدد أشهر الدوام في السنة','العدد','الراتب الشهري الإجمالي'],W,C.COL_HDR_BLU),
       ...data.hrRows.map((r,i)=>new TableRow({children:[
@@ -681,12 +675,12 @@ async function generateWord(data) {
     ],W));
 
     // org-chart page (own section; SmartArt-like shapes injected post-process)
-    sections.push(mkSec([
+    S.org = mkSec([
       new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{before:200,after:200},
         children:[new TextRun({text:'الهيكل التنظيمي',bold:true,size:32,font:FONT,color:C.DARK_BLUE})]}),
       new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{before:0,after:0},
         children:[new TextRun({text:'[[ORGCHART]]',size:2,font:FONT,color:'FFFFFF'})]}),
-    ], VerticalAlign.TOP));
+    ], VerticalAlign.TOP);
   }
 
   // ══ 7. FIXED ════════════════════════════════════════════
@@ -697,7 +691,7 @@ async function generateWord(data) {
       const t=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0;
       tot += t;   // all rows are monthly now (salary & marketing rows have qty=1)
     });
-    page(T_([
+    S.fixed = page(T_([
       secHdr('التكاليف الثابتة',7),
       colHdr(['#','الصنف','البيان','ملاحظات','التكلفة الشهرية للواحدة','العدد','التكلفة الشهرية الإجمالية'],W,C.COL_HDR_BLU),
       ...data.fixedRows.map((r,i)=>new TableRow({children:[
@@ -717,7 +711,7 @@ async function generateWord(data) {
   if (data.depRows?.length) {
     const W=norm(COLW.dep,TW);
     let tot=0; data.depRows.forEach(r=>{tot+=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0;});
-    page(T_([
+    S.dep = page(T_([
       secHdr('الاهتلاك',8),
       colHdr(['#','الصنف','البيان','نسبة الاهتلاك','ملاحظات','قيمة الاهتلاك للواحدة','العدد','قيمة الاهتلاك الإجمالية'],W,C.COL_HDR_BLU),
       ...data.depRows.map((r,i)=>new TableRow({children:[
@@ -734,6 +728,9 @@ async function generateWord(data) {
     ],W));
   }
 
+  // ترتيب الصفحات النهائي المطلوب
+  [S.applicant, S.project, S.mkt, S.founding, S.products, S.revenue, S.ops, S.hr, S.org, S.fixed, S.dep, S.summary]
+    .forEach(sec => { if (sec) sections.push(sec); });
   const buf = await Packer.toBuffer(new Document({sections}));
   const withChart = await injectOrgChart(buf, data.hrRows);
   const withFinance = await injectFinance(withChart, data.summary);
@@ -915,8 +912,9 @@ function paybackPhrase(years){
   const total=Math.ceil(years*12); const y=Math.floor(total/12), m=total%12;
   const yw = y===0?'':(y+(y===1?' سنة':(y<=10?' سنوات':' سنة')));
   const mw = m===0?'':(m+(m===1?' شهر':(m<=10?' أشهر':' شهر')));
-  if(!yw && !mw) return 'أقل من شهر';
-  return (yw&&mw)?(yw+' و'+mw):(yw||mw);
+  if(!yw && !mw) return '\u200Fأقل من شهر';
+  const out = (yw&&mw)?(yw+' و'+mw):(yw||mw);
+  return '\u200F'+out;
 }
 // ── Excel org chart: real drawing shapes injected into the HR sheet ──
 // Each shape is anchored to the actual column under its position (screen-from-right),
@@ -960,12 +958,12 @@ function buildExcelOrgDrawingXml(hrRows, top0){
 async function injectExcelOrgChart(buffer, hrRows){
   try{
     const {persons}=buildPersons(hrRows); if(!persons.length) return buffer;
-    const nH=(hrRows||[]).length, totalR=4+nH, titleR=totalR+2, top0=titleR;
+    const top0=2;
     const drawing=buildExcelOrgDrawingXml(hrRows, top0); if(!drawing) return buffer;
     const zip=await JSZip.loadAsync(buffer);
     const wbXml=await zip.file('xl/workbook.xml').async('string');
     const relsXml=await zip.file('xl/_rels/workbook.xml.rels').async('string');
-    const m=wbXml.match(/<sheet[^>]*name="الموارد البشرية"[^>]*r:id="([^"]+)"/);
+    const m=wbXml.match(/<sheet[^>]*name="الهيكل التنظيمي"[^>]*r:id="([^"]+)"/);
     if(!m) return buffer;
     const rm=relsXml.match(new RegExp('<Relationship[^>]*Id="'+m[1]+'"[^>]*Target="([^"]+)"'));
     if(!rm) return buffer;

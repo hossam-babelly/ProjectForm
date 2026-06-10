@@ -68,7 +68,7 @@ async function load() {
   list.innerHTML = data.submissions.map(s => `
     <div class="card" id="card_${s.id}">
       <div class="card-header">
-        <div class="card-idea">${s.projectIdea || '—'}</div>
+        <div class="card-idea">${s.projectTitle || s.projectIdea || '—'}</div>
         <div class="card-date">${new Date(s.submittedAt).toLocaleDateString('ar-SA',{year:'numeric',month:'short',day:'numeric'})}</div>
       </div>
       <div class="card-body">
