@@ -1078,24 +1078,33 @@ async function injectFinance(buffer, summary){
 // ════════════════════════════════════════════════════════════
 //  EMAIL SENDER
 // ════════════════════════════════════════════════════════════
+function gmailTransport(port){
+  return nodemailer.createTransport({
+    host:'smtp.gmail.com', port, secure: port===465, requireTLS: port===587,
+    auth:{ user:process.env.EMAIL_USER, pass:process.env.EMAIL_PASS },
+    connectionTimeout:15000, greetingTimeout:10000, socketTimeout:20000,
+  });
+}
+// try port 587 (STARTTLS) first, then 465 (SSL) — whichever the host allows
+async function sendViaGmail(mail){
+  let lastErr;
+  for(const port of [587,465]){
+    try { await gmailTransport(port).sendMail(mail); console.log('📧 أُرسل عبر المنفذ', port); return port; }
+    catch(e){ lastErr=e; console.error('تعذّر الإرسال عبر المنفذ', port, '—', e.code||e.message); }
+  }
+  throw lastErr;
+}
 async function sendEmail(data, id, excelBuf, wordBuf) {
   if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
     console.log('⚠️  متغيرات الإيميل غير مضبوطة — تخطي الإرسال');
     return;
   }
-  const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true,
-    auth:{ user:process.env.EMAIL_USER, pass:process.env.EMAIL_PASS },
-    connectionTimeout: 15000, greetingTimeout: 10000, socketTimeout: 20000,
-  });
   const to = process.env.RECEIVER_EMAIL || process.env.EMAIL_USER;
   const cc = (process.env.CC_EMAIL || '').trim();
   const projName = (data.projectTitle || data.projectIdea || 'مشروع').toString().substring(0,60);
   const applicant = (data.applicantName || '—').toString().substring(0,40);
   const base = fileBase(data);
-  await transporter.sendMail({
+  await sendViaGmail({
     from:    `"نظام دراسة المشاريع" <${process.env.EMAIL_USER}>`,
     to,
     ...(cc ? { cc } : {}),
@@ -1313,24 +1322,27 @@ app.get('/api/email-test', async (req, res) => {
   if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
     return res.json({ ok:false, step:'config', message:'EMAIL_USER أو EMAIL_PASS غير مضبوطة في Render → Environment', present });
   }
-  const t = nodemailer.createTransport({
-    host:'smtp.gmail.com', port:465, secure:true,
-    auth:{ user:process.env.EMAIL_USER, pass:process.env.EMAIL_PASS },
-    connectionTimeout:15000, greetingTimeout:10000, socketTimeout:20000,
-  });
-  try { await t.verify(); }
-  catch(e){ return res.json({ ok:false, step:'verify',
-    message:'فشل الاتصال أو المصادقة مع Gmail. غالباً: كلمة مرور التطبيق خاطئة، أو ليست لنفس حساب EMAIL_USER، أو التحقق بخطوتين غير مفعّل.',
-    error:e.message, code:e.code, present }); }
+  // try to connect/authenticate on both ports and report each
+  const ports = {};
+  let working = null;
+  for (const port of [587, 465]) {
+    try { await gmailTransport(port).verify(); ports['port_'+port] = '✓ يعمل'; if(!working) working = port; }
+    catch(e){ ports['port_'+port] = `✗ ${e.code||e.message}`; }
+  }
+  if (!working) {
+    return res.json({ ok:false, step:'verify',
+      message:'تعذّر الاتصال بـ Gmail على المنفذين 587 و465. إذا كان الخطأ ETIMEDOUT فالاستضافة تحجب منافذ SMTP — الحل التحويل لخدمة إيميل عبر HTTP (مثل Brevo/Resend). إذا كان EAUTH فالمشكلة بكلمة مرور التطبيق.',
+      ports, present });
+  }
   try {
     const to = process.env.RECEIVER_EMAIL || process.env.EMAIL_USER;
     const cc = (process.env.CC_EMAIL||'').trim();
-    const info = await t.sendMail({
+    const info = await gmailTransport(working).sendMail({
       from:`"اختبار النظام" <${process.env.EMAIL_USER}>`, to, ...(cc?{cc}:{}),
       subject:'✅ اختبار إيميل — نظام دراسة المشاريع',
       text:'إذا وصلتك هذه الرسالة، فإعدادات الإيميل تعمل بنجاح وكل النماذج القادمة ستصلك.' });
-    return res.json({ ok:true, step:'sent', message:'تم إرسال إيميل اختبار بنجاح — تفقّد صندوق الوارد (والـ CC).', to, cc:cc||'(لا يوجد)', messageId:info.messageId, present });
-  } catch(e){ return res.json({ ok:false, step:'send', message:'نجح الاتصال لكن فشل إرسال الرسالة', error:e.message, code:e.code, present }); }
+    return res.json({ ok:true, step:'sent', message:`تم إرسال إيميل اختبار بنجاح عبر المنفذ ${working} — تفقّد صندوق الوارد (والـ CC).`, working_port:working, to, cc:cc||'(لا يوجد)', messageId:info.messageId, ports, present });
+  } catch(e){ return res.json({ ok:false, step:'send', message:'نجح الاتصال لكن فشل إرسال الرسالة', error:e.message, code:e.code, ports, present }); }
 });
 
 // مسار التقاط الكل (يجب أن يبقى آخر مسار) — يرجّع صفحة التقديم لأي رابط غير معروف
