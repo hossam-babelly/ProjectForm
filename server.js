@@ -1078,34 +1078,43 @@ async function injectFinance(buffer, summary){
 // ════════════════════════════════════════════════════════════
 //  EMAIL SENDER
 // ════════════════════════════════════════════════════════════
-function gmailTransport(port){
-  return nodemailer.createTransport({
-    host:'smtp.gmail.com', port, secure: port===465, requireTLS: port===587,
-    auth:{ user:process.env.EMAIL_USER, pass:process.env.EMAIL_PASS },
-    connectionTimeout:15000, greetingTimeout:10000, socketTimeout:20000,
+// ===== إرسال عبر Brevo HTTP API (يعمل حتى لو حجبت الاستضافة منافذ SMTP) =====
+// يقبل نفس شكل nodemailer ({to, cc, subject, html, attachments:[{filename,content}]})
+async function sendViaBrevo(mail){
+  const apiKey = process.env.BREVO_API_KEY;
+  if(!apiKey) throw new Error('BREVO_API_KEY غير مضبوط');
+  const senderEmail = process.env.SENDER_EMAIL || process.env.EMAIL_USER;
+  if(!senderEmail) throw new Error('SENDER_EMAIL غير مضبوط');
+  const body = {
+    sender: { name:'نظام دراسة المشاريع', email: senderEmail },
+    to: [{ email: mail.to }],
+    subject: mail.subject,
+    htmlContent: mail.html || ' ',
+  };
+  if(mail.cc) body.cc = String(mail.cc).split(',').map(e=>({email:e.trim()})).filter(x=>x.email);
+  if(mail.attachments && mail.attachments.length)
+    body.attachment = mail.attachments.map(a=>({ name:a.filename,
+      content: Buffer.isBuffer(a.content) ? a.content.toString('base64') : Buffer.from(a.content).toString('base64') }));
+  const r = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method:'POST',
+    headers:{ 'api-key':apiKey, 'content-type':'application/json', 'accept':'application/json' },
+    body: JSON.stringify(body),
   });
-}
-// try port 587 (STARTTLS) first, then 465 (SSL) — whichever the host allows
-async function sendViaGmail(mail){
-  let lastErr;
-  for(const port of [587,465]){
-    try { await gmailTransport(port).sendMail(mail); console.log('📧 أُرسل عبر المنفذ', port); return port; }
-    catch(e){ lastErr=e; console.error('تعذّر الإرسال عبر المنفذ', port, '—', e.code||e.message); }
-  }
-  throw lastErr;
+  const txt = await r.text();
+  if(!r.ok) throw new Error(`Brevo ${r.status}: ${txt}`);
+  return txt;
 }
 async function sendEmail(data, id, excelBuf, wordBuf) {
-  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-    console.log('⚠️  متغيرات الإيميل غير مضبوطة — تخطي الإرسال');
+  if (!process.env.BREVO_API_KEY) {
+    console.log('⚠️  BREVO_API_KEY غير مضبوط — تخطي الإرسال');
     return;
   }
-  const to = process.env.RECEIVER_EMAIL || process.env.EMAIL_USER;
+  const to = process.env.RECEIVER_EMAIL || process.env.SENDER_EMAIL || process.env.EMAIL_USER;
   const cc = (process.env.CC_EMAIL || '').trim();
   const projName = (data.projectTitle || data.projectIdea || 'مشروع').toString().substring(0,60);
   const applicant = (data.applicantName || '—').toString().substring(0,40);
   const base = fileBase(data);
-  await sendViaGmail({
-    from:    `"نظام دراسة المشاريع" <${process.env.EMAIL_USER}>`,
+  await sendViaBrevo({
     to,
     ...(cc ? { cc } : {}),
     subject: `📋 نموذج جديد — ${projName} — ${applicant}`,
@@ -1314,35 +1323,29 @@ app.put('/api/submissions/:id', async (req, res) => {
 // ── تشخيص الإيميل: افتح /api/email-test لمعرفة سبب المشكلة بالضبط ──
 app.get('/api/email-test', async (req, res) => {
   const present = {
-    EMAIL_USER: process.env.EMAIL_USER ? '✓ مضبوط' : '✗ غير مضبوط',
-    EMAIL_PASS: process.env.EMAIL_PASS ? `✓ مضبوط (${process.env.EMAIL_PASS.length} حرف)` : '✗ غير مضبوط',
-    RECEIVER_EMAIL: process.env.RECEIVER_EMAIL || '(سيُستخدم EMAIL_USER)',
+    BREVO_API_KEY: process.env.BREVO_API_KEY ? `✓ مضبوط (${process.env.BREVO_API_KEY.length} حرف)` : '✗ غير مضبوط',
+    SENDER_EMAIL: process.env.SENDER_EMAIL || process.env.EMAIL_USER || '✗ غير مضبوط',
+    RECEIVER_EMAIL: process.env.RECEIVER_EMAIL || '(سيُستخدم SENDER_EMAIL)',
     CC_EMAIL: process.env.CC_EMAIL || '(لا يوجد)',
   };
-  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-    return res.json({ ok:false, step:'config', message:'EMAIL_USER أو EMAIL_PASS غير مضبوطة في Render → Environment', present });
+  if (!process.env.BREVO_API_KEY) {
+    return res.json({ ok:false, step:'config', message:'BREVO_API_KEY غير مضبوط في Render → Environment', present });
   }
-  // try to connect/authenticate on both ports and report each
-  const ports = {};
-  let working = null;
-  for (const port of [587, 465]) {
-    try { await gmailTransport(port).verify(); ports['port_'+port] = '✓ يعمل'; if(!working) working = port; }
-    catch(e){ ports['port_'+port] = `✗ ${e.code||e.message}`; }
-  }
-  if (!working) {
-    return res.json({ ok:false, step:'verify',
-      message:'تعذّر الاتصال بـ Gmail على المنفذين 587 و465. إذا كان الخطأ ETIMEDOUT فالاستضافة تحجب منافذ SMTP — الحل التحويل لخدمة إيميل عبر HTTP (مثل Brevo/Resend). إذا كان EAUTH فالمشكلة بكلمة مرور التطبيق.',
-      ports, present });
+  if (!process.env.SENDER_EMAIL && !process.env.EMAIL_USER) {
+    return res.json({ ok:false, step:'config', message:'SENDER_EMAIL غير مضبوط (إيميل المُرسِل المُفعّل في Brevo)', present });
   }
   try {
-    const to = process.env.RECEIVER_EMAIL || process.env.EMAIL_USER;
+    const to = process.env.RECEIVER_EMAIL || process.env.SENDER_EMAIL || process.env.EMAIL_USER;
     const cc = (process.env.CC_EMAIL||'').trim();
-    const info = await gmailTransport(working).sendMail({
-      from:`"اختبار النظام" <${process.env.EMAIL_USER}>`, to, ...(cc?{cc}:{}),
+    await sendViaBrevo({ to, cc,
       subject:'✅ اختبار إيميل — نظام دراسة المشاريع',
-      text:'إذا وصلتك هذه الرسالة، فإعدادات الإيميل تعمل بنجاح وكل النماذج القادمة ستصلك.' });
-    return res.json({ ok:true, step:'sent', message:`تم إرسال إيميل اختبار بنجاح عبر المنفذ ${working} — تفقّد صندوق الوارد (والـ CC).`, working_port:working, to, cc:cc||'(لا يوجد)', messageId:info.messageId, ports, present });
-  } catch(e){ return res.json({ ok:false, step:'send', message:'نجح الاتصال لكن فشل إرسال الرسالة', error:e.message, code:e.code, ports, present }); }
+      html:'<div dir="rtl" style="font-family:Arial">إذا وصلتك هذه الرسالة فإعدادات الإيميل تعمل بنجاح، وكل النماذج القادمة ستصلك تلقائياً.</div>' });
+    return res.json({ ok:true, step:'sent', message:'تم إرسال إيميل اختبار بنجاح عبر Brevo — تفقّد صندوق الوارد (والـ CC).', to, cc:cc||'(لا يوجد)', present });
+  } catch(e){
+    return res.json({ ok:false, step:'send',
+      message:'فشل الإرسال عبر Brevo. الأسباب الشائعة: (1) BREVO_API_KEY خاطئ → الخطأ يحوي 401. (2) SENDER_EMAIL غير مُفعّل كمُرسِل في Brevo → الخطأ يحوي "sender" أو 400.',
+      error:String(e.message||e), present });
+  }
 });
 
 // مسار التقاط الكل (يجب أن يبقى آخر مسار) — يرجّع صفحة التقديم لأي رابط غير معروف
