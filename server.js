@@ -270,8 +270,8 @@ async function generateExcel(data) {
     ws.getCell(payRow,7).value={formula:`INT(F${payRow}/12)`};
     ws.getCell(payRow,8).value={formula:`MOD(F${payRow},12)`};
     const y=`G${payRow}`, mo=`H${payRow}`;
-    const yw=`IF(${y}=0,"",IF(${y}=1,"سنة",IF(${y}=2,"سنتان",IF(${y}<=10,${y}&" سنوات",${y}&" سنة"))))`;
-    const mw=`IF(${mo}=0,"",IF(${mo}=1,"شهر",IF(${mo}=2,"شهران",IF(${mo}<=10,${mo}&" أشهر",${mo}&" شهراً"))))`;
+    const yw=`IF(${y}=0,"",${y}&IF(${y}=1," سنة",IF(${y}<=10," سنوات"," سنة")))`;
+    const mw=`IF(${mo}=0,"",${mo}&IF(${mo}=1," شهر",IF(${mo}<=10," أشهر"," شهر")))`;
     const phrase=`IF(E${payRow}<=0,"—",IF(AND(${y}=0,${mo}=0),"أقل من شهر",TRIM(${yw}&IF(AND(${y}>0,${mo}>0)," و ","")&${mw})))`;
     ws.mergeCells(payRow,2,payRow,3); const pv=ws.getCell(payRow,2); pv.value={formula:phrase};
     pv.font={bold:true,name:F,size:13,color:{argb:FORMULA}}; pv.fill=fill(SUMVAL); pv.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; pv.border=thin(); ws.getRow(payRow).height=24; R++;
@@ -913,8 +913,8 @@ function escXml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;
 function paybackPhrase(years){
   if(!isFinite(years) || years<=0) return '—';
   const total=Math.ceil(years*12); const y=Math.floor(total/12), m=total%12;
-  const yw = y===0?'':(y===1?'سنة':y===2?'سنتان':(y<=10?y+' سنوات':y+' سنة'));
-  const mw = m===0?'':(m===1?'شهر':m===2?'شهران':(m<=10?m+' أشهر':m+' شهراً'));
+  const yw = y===0?'':(y+(y===1?' سنة':(y<=10?' سنوات':' سنة')));
+  const mw = m===0?'':(m+(m===1?' شهر':(m<=10?' أشهر':' شهر')));
   if(!yw && !mw) return 'أقل من شهر';
   return (yw&&mw)?(yw+' و'+mw):(yw||mw);
 }
@@ -1084,8 +1084,11 @@ async function sendEmail(data, id, excelBuf, wordBuf) {
     return;
   }
   const transporter = nodemailer.createTransport({
-    service:'gmail',
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true,
     auth:{ user:process.env.EMAIL_USER, pass:process.env.EMAIL_PASS },
+    connectionTimeout: 15000, greetingTimeout: 10000, socketTimeout: 20000,
   });
   const to = process.env.RECEIVER_EMAIL || process.env.EMAIL_USER;
   const cc = (process.env.CC_EMAIL || '').trim();
@@ -1159,12 +1162,12 @@ app.post('/api/submit', async (req, res) => {
     fs.writeFileSync(path.join(DATA_DIR,`${id}.docx`), wordBuf);
 
     console.log(`✅ طلب جديد: ${id}`);
-    // send the email FIRST (await) so the free Render instance stays alive until
-    // the message + attachments are delivered — guarantees no submission is lost.
-    let emailed = false;
-    try { await sendEmail(submission, id, excelBuf, wordBuf); emailed = true; }
-    catch(e){ console.error('Email error:', e.message); }
-    res.json({ success:true, id, emailed, fileName: fileBase(submission)+'.docx' });
+    // respond NOW so the browser downloads instantly …
+    res.json({ success:true, id, fileName: fileBase(submission)+'.docx' });
+    // … then send the email in the background with clear logging
+    sendEmail(submission, id, excelBuf, wordBuf)
+      .then(() => console.log(`📧 تم إرسال الإيميل بنجاح: ${id}`))
+      .catch(e => console.error(`❌ فشل إرسال الإيميل (${id}):`, e && (e.message||e), 'code=', e && e.code));
   } catch(err) {
     console.error('❌', err);
     if (!res.headersSent) return res.status(500).json({ success:false, message:err.message });
@@ -1300,6 +1303,37 @@ app.put('/api/submissions/:id', async (req, res) => {
 });
 
 app.get('*', (req, res) => res.sendFile(path.join(__dirname,'public','index.html')));
+
+// ── تشخيص الإيميل: افتح /api/email-test لمعرفة سبب المشكلة بالضبط ──
+app.get('/api/email-test', async (req, res) => {
+  const present = {
+    EMAIL_USER: process.env.EMAIL_USER ? '✓ مضبوط' : '✗ غير مضبوط',
+    EMAIL_PASS: process.env.EMAIL_PASS ? `✓ مضبوط (${process.env.EMAIL_PASS.length} حرف)` : '✗ غير مضبوط',
+    RECEIVER_EMAIL: process.env.RECEIVER_EMAIL || '(سيُستخدم EMAIL_USER)',
+    CC_EMAIL: process.env.CC_EMAIL || '(لا يوجد)',
+  };
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+    return res.json({ ok:false, step:'config', message:'EMAIL_USER أو EMAIL_PASS غير مضبوطة في Render → Environment', present });
+  }
+  const t = nodemailer.createTransport({
+    host:'smtp.gmail.com', port:465, secure:true,
+    auth:{ user:process.env.EMAIL_USER, pass:process.env.EMAIL_PASS },
+    connectionTimeout:15000, greetingTimeout:10000, socketTimeout:20000,
+  });
+  try { await t.verify(); }
+  catch(e){ return res.json({ ok:false, step:'verify',
+    message:'فشل الاتصال أو المصادقة مع Gmail. غالباً: كلمة مرور التطبيق خاطئة، أو ليست لنفس حساب EMAIL_USER، أو التحقق بخطوتين غير مفعّل.',
+    error:e.message, code:e.code, present }); }
+  try {
+    const to = process.env.RECEIVER_EMAIL || process.env.EMAIL_USER;
+    const cc = (process.env.CC_EMAIL||'').trim();
+    const info = await t.sendMail({
+      from:`"اختبار النظام" <${process.env.EMAIL_USER}>`, to, ...(cc?{cc}:{}),
+      subject:'✅ اختبار إيميل — نظام دراسة المشاريع',
+      text:'إذا وصلتك هذه الرسالة، فإعدادات الإيميل تعمل بنجاح وكل النماذج القادمة ستصلك.' });
+    return res.json({ ok:true, step:'sent', message:'تم إرسال إيميل اختبار بنجاح — تفقّد صندوق الوارد (والـ CC).', to, cc:cc||'(لا يوجد)', messageId:info.messageId, present });
+  } catch(e){ return res.json({ ok:false, step:'send', message:'نجح الاتصال لكن فشل إرسال الرسالة', error:e.message, code:e.code, present }); }
+});
 
 app.listen(PORT, () => console.log(`🚀 يعمل على المنفذ ${PORT}`));
 module.exports = app;
