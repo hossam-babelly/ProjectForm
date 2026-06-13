@@ -30,6 +30,14 @@ function readAsset(rel) {
 }
 const LETTERHEAD_PNG = readAsset('letterhead.png');
 
+// أجزاء SmartArt الأصلية (Organisation Chart) المستخرجة من Office — تُعاد كما هي،
+// بينما يُولَّد data1.xml و drawing1.xml لكل طلب. غيابها = العودة لرسم الأشكال.
+const DGM_LAYOUT_XML   = readAsset('diagrams/orgchart-layout.xml');
+const DGM_QS_XML       = readAsset('diagrams/orgchart-quickstyle.xml');
+const DGM_COLORS_XML   = readAsset('diagrams/orgchart-colors.xml');
+const OFFICE_THEME_XML = readAsset('diagrams/office-theme.xml');
+const SMARTART_OK = !!(DGM_LAYOUT_XML && DGM_QS_XML && DGM_COLORS_XML);
+
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
@@ -105,7 +113,7 @@ async function generateExcel(data) {
     v.fill=fill(SUMVAL); v.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; v.border=thin();
     ws.getRow(rowIdx).height=24; }
 
-  const SN={app:'معلومات المقدّم',proj:'معلومات المشروع',org:'الهيكل التنظيمي',sum:'الخلاصة المالية السنوية',found:'التكاليف التأسيسية',prod:'المنتجات',
+  const SN={app:'معلومات المقدّم',proj:'معلومات المشروع',sum:'الخلاصة المالية السنوية',found:'التكاليف التأسيسية',prod:'المنتجات',
     mkt:'التسويق والمبيع',rev:'الإيرادات',ops:'التكاليف التشغيلية',hr:'الموارد البشرية',fixed:'التكاليف الثابتة',dep:'الاهتلاك'};
   const wsApp=wb.addWorksheet(SN.app,{views:[{rightToLeft:true}]});
   const wsProj=wb.addWorksheet(SN.proj,{views:[{rightToLeft:true}]});
@@ -115,7 +123,6 @@ async function generateExcel(data) {
   const wsRev=wb.addWorksheet(SN.rev,{views:[{rightToLeft:true}]});
   const wsOps=wb.addWorksheet(SN.ops,{views:[{rightToLeft:true}]});
   const wsHR=wb.addWorksheet(SN.hr,{views:[{rightToLeft:true}]});
-  const wsOrg=wb.addWorksheet(SN.org,{views:[{rightToLeft:true}]});
   const wsFixed=wb.addWorksheet(SN.fixed,{views:[{rightToLeft:true}]});
   const wsDep=wb.addWorksheet(SN.dep,{views:[{rightToLeft:true}]});
   const wsSum=wb.addWorksheet(SN.sum,{views:[{rightToLeft:true}]});
@@ -145,8 +152,6 @@ async function generateExcel(data) {
     const tr=4+rows.length;
     totalRow(ws,tr,1,7,'إجمالي الرواتب (سنوياً)',8, rows.length?{formula:`SUMPRODUCT(E4:E${tr-1},G4:G${tr-1},F4:F${tr-1})`}:0);
     refs.hrAnnual=`${Q(SN.hr)}!$H$${tr}`; }
-
-  { const ws=wsOrg; band(ws,8,'الهيكل التنظيمي'); [6,20,16,18,18,15,9,20].forEach((w,i)=>ws.getColumn(i+1).width=w); }
 
   // MARKETING
   { const ws=wsMkt; band(ws,4,'التسويق والمبيع'); ws.columns=[{width:24},{width:28},{width:28},{width:28}];
@@ -315,6 +320,18 @@ async function generateExcel(data) {
     lv('نوع المكان المقترح',data.placeType); lv('وضع المكان',data.placeStatus); lv('عنوان / موقع المشروع',data.projectAddress); }
 
   [wsFound,wsHR,wsRev,wsOps,wsFixed,wsDep].forEach(ws=>{ ws.views=[{rightToLeft:true,state:'frozen',ySplit:3}]; });
+
+  // ── تمريرة نهائية: تكبير جميع الخطوط درجتين وجعلها عريضة + توسيع الصفوف ──
+  wb.eachSheet(ws=>{
+    ws.properties.defaultRowHeight=21;
+    ws.eachRow({includeEmpty:false},row=>{
+      if(row.height) row.height=Math.round(row.height*1.2);
+      row.eachCell({includeEmpty:false},cell=>{
+        const f=cell.font||{};
+        cell.font={...f,name:F,size:(f.size||11)+2,bold:true};
+      });
+    });
+  });
   const xbuf = await wb.xlsx.writeBuffer();
   return injectExcelOrgChart(xbuf, data.hrRows);
 }
@@ -613,7 +630,7 @@ async function generateWord(data) {
     ]}));
     const revAnnual = MONTHS.reduce((a,_,m)=>{let t=0;pids.forEach(pid=>{t+=parseFloat(String(data.revenueData?.[pid]?.[m]?.total||'0').replace(/[^0-9.-]/g,''))||0;});return a+t;},0);
     revRows.push(new TableRow({children:[
-      C_('إجمالي الإيرادات السنوية:  '+fM(revAnnual),{fill:C.DARK_BLUE,bold:true,sz:30,colSpan:14,w:TW,align:AlignmentType.CENTER,color:C.WHITE}),
+      C_('إجمالي الإيرادات السنوية:  \u200E$'+fN(revAnnual),{fill:C.DARK_BLUE,bold:true,sz:30,colSpan:14,w:TW,align:AlignmentType.CENTER,color:C.WHITE}),
     ]}));
     S.revenue = page(T_(revRows,W));
   }
@@ -657,7 +674,7 @@ async function generateWord(data) {
     ]}));
     const opsAnnual = MONTHS.reduce((a,_,m)=>{let t=0;pids.forEach(pid=>{t+=parseFloat(String(data.opsData?.[pid]?.[`sub_${m}`]||'0').replace(/[^0-9.-]/g,''))||0;});return a+t;},0);
     opsRows.push(new TableRow({children:[
-      C_('إجمالي التكاليف التشغيلية السنوية:  '+fM(opsAnnual),{fill:C.DARK_BLUE,bold:true,sz:30,colSpan:15,w:TW,align:AlignmentType.CENTER,color:C.WHITE}),
+      C_('إجمالي التكاليف التشغيلية السنوية:  \u200E$'+fN(opsAnnual),{fill:C.DARK_BLUE,bold:true,sz:30,colSpan:15,w:TW,align:AlignmentType.CENTER,color:C.WHITE}),
     ]}));
     S.ops = page(T_(opsRows,W));
   }
@@ -906,14 +923,147 @@ function buildOrgChartParagraphXml(hrRows){
   return `<w:p><w:pPr><w:spacing w:after="0"/></w:pPr>${runs}</w:p>`;
 }
 
-// replace the [[ORGCHART]] marker paragraph with the anchored-shapes paragraph
+// replace the [[ORGCHART]] marker paragraph — real SmartArt first, anchored shapes as fallback
 async function injectOrgChart(buffer, hrRows){
   const {persons}=buildPersons(hrRows);
   if(!persons.length) return buffer;
+  if(SMARTART_OK){
+    try{
+      const out = await injectWordSmartArt(buffer, hrRows);
+      if(out) return out;
+    }catch(e){ console.error('⚠️ SmartArt(Word) فشل — عودة لرسم الأشكال:', e && (e.message||e)); }
+  }
   const para=buildOrgChartParagraphXml(hrRows);
   if(!para) return buffer;
   const zip=await JSZip.loadAsync(buffer);
   let xml=await zip.file('word/document.xml').async('string');
+  xml=xml.replace(/<w:p\b[^>]*>(?:(?!<\/w:p>).)*?\[\[ORGCHART\]\](?:(?!<\/w:p>).)*?<\/w:p>/s, para);
+  zip.file('word/document.xml', xml);
+  return zip.generateAsync({type:'nodebuffer', compression:'DEFLATE'});
+}
+
+// ════════════════════════════════════════════════════════════
+//  Real SmartArt — Organisation Chart (orgChart1)
+//  layout/quickStyle/colors = أجزاء Office أصلية من assets/diagrams
+//  data1.xml  = شجرة الموظفين (لون كل عقدة حسب النوع)
+//  drawing1.xml = رسم مخبّأ بإحداثيات orgLayout (يضمن العرض في كل البرامج)
+// ════════════════════════════════════════════════════════════
+const NS_DGM='http://schemas.openxmlformats.org/drawingml/2006/diagram';
+const NS_A  ='http://schemas.openxmlformats.org/drawingml/2006/main';
+const NS_DSP='http://schemas.microsoft.com/office/drawing/2008/diagram';
+const NS_R  ='http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const REL_DGM_BASE='http://schemas.openxmlformats.org/officeDocument/2006/relationships/';
+const REL_DGM_DRAW='http://schemas.microsoft.com/office/2007/relationships/diagramDrawing';
+const CT_DGM={
+  data :'application/vnd.openxmlformats-officedocument.drawingml.diagramData+xml',
+  lo   :'application/vnd.openxmlformats-officedocument.drawingml.diagramLayout+xml',
+  qs   :'application/vnd.openxmlformats-officedocument.drawingml.diagramStyle+xml',
+  cs   :'application/vnd.openxmlformats-officedocument.drawingml.diagramColors+xml',
+  draw :'application/vnd.ms-office.drawingml.diagramDrawing+xml',
+};
+
+// يبني data1.xml و drawing1.xml لمخطط SmartArt بقياس frameW×frameH (EMU)
+function buildOrgSmartArt(hrRows, frameW, frameH, drawingRelId){
+  const L=orgLayout(hrRows); if(!L) return null;
+  const scale=Math.min(frameW/L.W, frameH/L.H);
+  const sx=v=>Math.round(v*scale);
+  const xOff=Math.max(0,Math.round((frameW-L.W*scale)/2));
+  const yOff=Math.max(0,Math.round((frameH-L.H*scale)/2));
+  const bw=sx(L.boxW), bh=sx(L.boxH);
+  const px=n=>xOff+sx(n.x), py=n=>yOff+sx(n.y);
+  const nameSz=Math.max(900,Math.min(1400,Math.round(1300*Math.min(scale,1.2))));
+  const typeSz=Math.max(800,Math.min(1100,Math.round(1050*Math.min(scale,1.2))));
+  const lineClr='4472C4';
+
+  // نص العقدة (سطران: المنصب + النوع) — يُستخدم في data و drawing معاً
+  const paras=n=>
+    `<a:p><a:pPr algn="ctr" rtl="1"/><a:r><a:rPr lang="ar-SA" sz="${nameSz}" b="1"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:latin typeface="${FONT}"/><a:cs typeface="${FONT}"/></a:rPr><a:t>${escXml(n.pos)}</a:t></a:r></a:p>`+
+    `<a:p><a:pPr algn="ctr" rtl="1"/><a:r><a:rPr lang="ar-SA" sz="${typeSz}"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:latin typeface="${FONT}"/><a:cs typeface="${FONT}"/></a:rPr><a:t>(${escXml(n.type)})</a:t></a:r></a:p>`;
+
+  // ── data model ──
+  const docId=gid();
+  const pts=[], cxns=[], edges=[];
+  pts.push(`<dgm:pt modelId="${docId}" type="doc"><dgm:prSet loTypeId="urn:microsoft.com/office/officeart/2005/8/layout/orgChart1" loCatId="hierarchy" qsTypeId="urn:microsoft.com/office/officeart/2005/8/quickstyle/simple1" qsCatId="simple" csTypeId="urn:microsoft.com/office/officeart/2005/8/colors/accent1_2" csCatId="accent1" phldr="0"/><dgm:spPr/><dgm:t><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="ar-SA"/></a:p></dgm:t></dgm:pt>`);
+  L.all.forEach(n=>{
+    const c=orgFill(n.type);
+    pts.push(`<dgm:pt modelId="${n.id}"><dgm:prSet/><dgm:spPr><a:solidFill><a:srgbClr val="${c.fill}"/></a:solidFill><a:ln w="12700"><a:solidFill><a:srgbClr val="${c.line}"/></a:solidFill></a:ln></dgm:spPr><dgm:t><a:bodyPr/><a:lstStyle/>${paras(n)}</dgm:t></dgm:pt>`);
+  });
+  const ordBySrc={};
+  function link(srcId, node, isRoot){
+    const cxnId=gid(), parT=gid(), sibT=gid();
+    const ord=ordBySrc[srcId]=(ordBySrc[srcId]===undefined?0:ordBySrc[srcId]+1);
+    pts.push(`<dgm:pt modelId="${parT}" type="parTrans" cxnId="${cxnId}"><dgm:prSet/><dgm:spPr/><dgm:t><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="ar-SA"/></a:p></dgm:t></dgm:pt>`);
+    pts.push(`<dgm:pt modelId="${sibT}" type="sibTrans" cxnId="${cxnId}"><dgm:prSet/><dgm:spPr/><dgm:t><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="ar-SA"/></a:p></dgm:t></dgm:pt>`);
+    cxns.push(`<dgm:cxn modelId="${cxnId}" srcId="${srcId}" destId="${node.id}" srcOrd="${ord}" destOrd="0" parTransId="${parT}" sibTransId="${sibT}"/>`);
+    if(!isRoot) edges.push({parentId:srcId, node, parT});
+  }
+  const byId={}; L.all.forEach(n=>byId[n.id]=n);
+  (function walk(nodes, parentId){
+    nodes.forEach(n=>{ link(parentId, n, parentId===docId); walk(n.children, n.id); });
+  })(L.all.filter(n=>n.depth===0), docId);
+
+  const extLst = drawingRelId
+    ? `<dgm:extLst><a:ext uri="${NS_DSP}"><dsp:dataModelExt xmlns:dsp="${NS_DSP}" relId="${drawingRelId}" minVer="${NS_DGM}"/></a:ext></dgm:extLst>`
+    : '';
+  const dataXml=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<dgm:dataModel xmlns:dgm="${NS_DGM}" xmlns:a="${NS_A}"><dgm:ptLst>${pts.join('')}</dgm:ptLst><dgm:cxnLst>${cxns.join('')}</dgm:cxnLst><dgm:bg/><dgm:whole/>${extLst}</dgm:dataModel>`;
+
+  // ── cached drawing (dsp) ──
+  const style=`<dsp:style><a:lnRef idx="2"><a:scrgbClr r="0" g="0" b="0"/></a:lnRef><a:fillRef idx="1"><a:scrgbClr r="0" g="0" b="0"/></a:fillRef><a:effectRef idx="0"><a:scrgbClr r="0" g="0" b="0"/></a:effectRef><a:fontRef idx="minor"/></dsp:style>`;
+  const shapes=[];
+  edges.forEach(({parentId,node,parT})=>{
+    const p=byId[parentId]; if(!p) return;
+    const pcx=px(p)+Math.round(bw/2), ccx=px(node)+Math.round(bw/2);
+    const pbot=py(p)+bh, ctop=py(node);
+    const busY=yOff+sx(p.y+L.boxH+L.vGap/2);
+    const x0=Math.min(pcx,ccx), w=Math.max(1,Math.abs(ccx-pcx)), y0=pbot, h=Math.max(1,ctop-pbot);
+    const rx=v=>v-x0, ry=v=>v-y0;
+    shapes.push(`<dsp:sp modelId="${parT}"><dsp:nvSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvSpPr/></dsp:nvSpPr><dsp:spPr><a:xfrm><a:off x="${x0}" y="${y0}"/><a:ext cx="${w}" cy="${h}"/></a:xfrm><a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="0" b="0"/><a:pathLst><a:path><a:moveTo><a:pt x="${rx(pcx)}" y="0"/></a:moveTo><a:lnTo><a:pt x="${rx(pcx)}" y="${ry(busY)}"/></a:lnTo><a:lnTo><a:pt x="${rx(ccx)}" y="${ry(busY)}"/></a:lnTo><a:lnTo><a:pt x="${rx(ccx)}" y="${h}"/></a:lnTo></a:path></a:pathLst></a:custGeom><a:noFill/><a:ln w="12700" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:srgbClr val="${lineClr}"/></a:solidFill><a:prstDash val="solid"/><a:miter lim="800000"/></a:ln></dsp:spPr>${style}</dsp:sp>`);
+  });
+  L.all.forEach(n=>{
+    const c=orgFill(n.type);
+    shapes.push(`<dsp:sp modelId="${n.id}"><dsp:nvSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvSpPr/></dsp:nvSpPr><dsp:spPr><a:xfrm><a:off x="${px(n)}" y="${py(n)}"/><a:ext cx="${bw}" cy="${bh}"/></a:xfrm><a:prstGeom prst="roundRect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="${c.fill}"/></a:solidFill><a:ln w="12700"><a:solidFill><a:srgbClr val="${c.line}"/></a:solidFill></a:ln></dsp:spPr>${style}<dsp:txBody><a:bodyPr spcFirstLastPara="0" vert="horz" wrap="square" lIns="18000" tIns="9000" rIns="18000" bIns="9000" numCol="1" spcCol="1270" anchor="ctr" anchorCtr="0"><a:noAutofit/></a:bodyPr><a:lstStyle/>${paras(n)}</dsp:txBody><dsp:txXfrm><a:off x="${px(n)}" y="${py(n)}"/><a:ext cx="${bw}" cy="${bh}"/></dsp:txXfrm></dsp:sp>`);
+  });
+  const drawingXml=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<dsp:drawing xmlns:dgm="${NS_DGM}" xmlns:dsp="${NS_DSP}" xmlns:a="${NS_A}"><dsp:spTree><dsp:nvGrpSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/>${shapes.join('')}</dsp:spTree></dsp:drawing>`;
+
+  return {dataXml, drawingXml};
+}
+
+// SmartArt في Word: إضافة الأجزاء + استبدال [[ORGCHART]] برسم dgm:relIds
+async function injectWordSmartArt(buffer, hrRows){
+  const zip=await JSZip.loadAsync(buffer);
+  let xml=await zip.file('word/document.xml').async('string');
+  if(!xml.includes('[[ORGCHART]]')) return null;
+  const L=orgLayout(hrRows); if(!L) return null;
+  const sc=Math.min(9770000/L.W, 5100000/L.H, 1.5);
+  const W=Math.max(1,Math.round(L.W*sc)), H=Math.max(1,Math.round(L.H*sc));
+  // بلا رسم مخبّأ — Word يعيد حساب التخطيط من data1+layout1 (أقل عرضة للأخطاء)
+  const art=buildOrgSmartArt(hrRows, W, H, null);
+  if(!art) return null;
+
+  zip.file('word/diagrams/data1.xml', art.dataXml);
+  zip.file('word/diagrams/layout1.xml', DGM_LAYOUT_XML);
+  zip.file('word/diagrams/quickStyle1.xml', DGM_QS_XML);
+  zip.file('word/diagrams/colors1.xml', DGM_COLORS_XML);
+
+  const relsPath='word/_rels/document.xml.rels';
+  let rels=await zip.file(relsPath).async('string');
+  rels=rels.replace('</Relationships>',
+    `<Relationship Id="rIdOrgDm1" Type="${REL_DGM_BASE}diagramData" Target="diagrams/data1.xml"/>`+
+    `<Relationship Id="rIdOrgLo1" Type="${REL_DGM_BASE}diagramLayout" Target="diagrams/layout1.xml"/>`+
+    `<Relationship Id="rIdOrgQs1" Type="${REL_DGM_BASE}diagramQuickStyle" Target="diagrams/quickStyle1.xml"/>`+
+    `<Relationship Id="rIdOrgCs1" Type="${REL_DGM_BASE}diagramColors" Target="diagrams/colors1.xml"/>`+
+    `</Relationships>`);
+  zip.file(relsPath, rels);
+
+  let ct=await zip.file('[Content_Types].xml').async('string');
+  const addCT=(pn,type)=>{ if(!ct.includes(`PartName="${pn}"`)) ct=ct.replace('</Types>',`<Override PartName="${pn}" ContentType="${type}"/></Types>`); };
+  addCT('/word/diagrams/data1.xml',CT_DGM.data);
+  addCT('/word/diagrams/layout1.xml',CT_DGM.lo);
+  addCT('/word/diagrams/quickStyle1.xml',CT_DGM.qs);
+  addCT('/word/diagrams/colors1.xml',CT_DGM.cs);
+  zip.file('[Content_Types].xml', ct);
+
+  const para=`<w:p><w:pPr><w:spacing w:after="0"/><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:noProof/></w:rPr><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${W}" cy="${H}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="9001" name="OrgChart"/><wp:cNvGraphicFramePr/><a:graphic xmlns:a="${NS_A}"><a:graphicData uri="${NS_DGM}"><dgm:relIds xmlns:dgm="${NS_DGM}" xmlns:r="${NS_R}" r:dm="rIdOrgDm1" r:lo="rIdOrgLo1" r:qs="rIdOrgQs1" r:cs="rIdOrgCs1"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
   xml=xml.replace(/<w:p\b[^>]*>(?:(?!<\/w:p>).)*?\[\[ORGCHART\]\](?:(?!<\/w:p>).)*?<\/w:p>/s, para);
   zip.file('word/document.xml', xml);
   return zip.generateAsync({type:'nodebuffer', compression:'DEFLATE'});
@@ -940,12 +1090,16 @@ function buildExcelOrgDrawingXml(hrRows, top0){
   const bw=sx(L.boxW), bh=sx(L.boxH);
   const colChars=[6,20,16,18,18,15,9,20];
   const wEmu=i=>{ const ch=i<colChars.length?colChars[i]:8.43; return Math.round((ch*7+5)*9525); };
+  // توسيط الهيكل أفقياً على عرض جدول الموارد البشرية (الأعمدة A..H)
+  const tableW=colChars.reduce((a,ch)=>a+Math.round((ch*7+5)*9525),0);
+  const chartW=Math.round(L.W*scale);
+  const xOff=Math.max(0,Math.round((tableW-chartW)/2));
   function sfr(emu){ let c=0, acc=0; while(c<400){ const w=wEmu(c); if(acc+w>emu) return {col:c, off:Math.max(0,Math.round(emu-acc))}; acc+=w; c++; } return {col:c, off:0}; }
-  const RH=190500;   // default row height (15pt) in EMU
+  const RH=266700;   // default row height (21pt) in EMU — يطابق defaultRowHeight بعد تكبير الخطوط
   function srow(y){ let r=top0, acc=0; while(acc+RH<=y && r<top0+800){ acc+=RH; r++; } return {row:r, off:Math.max(0,Math.round(y-acc))}; }
   const lineClr='4472C4'; let id=1;
   function place(xR,yT,w,h,inner){
-    const f=sfr(xR), t=sfr(xR+w), fr=srow(yT), tr=srow(yT+h);
+    const f=sfr(xR+xOff), t=sfr(xR+xOff+w), fr=srow(yT), tr=srow(yT+h);
     return `<xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>${f.col}</xdr:col><xdr:colOff>${f.off}</xdr:colOff><xdr:row>${fr.row}</xdr:row><xdr:rowOff>${fr.off}</xdr:rowOff></xdr:from><xdr:to><xdr:col>${t.col}</xdr:col><xdr:colOff>${t.off}</xdr:colOff><xdr:row>${tr.row}</xdr:row><xdr:rowOff>${tr.off}</xdr:rowOff></xdr:to>${inner}<xdr:clientData/></xdr:twoCellAnchor>`;
   }
   const rectLine=(xR,yT,w,h)=>{ const i=++id; w=Math.max(w,9525); h=Math.max(h,9525);
@@ -968,15 +1122,103 @@ function buildExcelOrgDrawingXml(hrRows, top0){
   L.all.forEach(n=>parts.push(box(n)));
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${parts.join('')}</xdr:wsDr>`;
 }
+// SmartArt حقيقي داخل ورقة Excel (graphicFrame + أجزاء diagram + رسم مخبّأ)
+// يُثبَّت أسفل جدول الموارد البشرية. عند أي فشل → نعود لرسم الأشكال.
+async function injectExcelSmartArt(buffer, hrRows){
+  const {persons}=buildPersons(hrRows); if(!persons.length) return null;
+  const L=orgLayout(hrRows); if(!L) return null;
+  const top0=(hrRows||[]).length+5;
+  // إطار المخطط بقياس EMU وبتوسيط أفقي على عرض جدول HR (الأعمدة A..H)
+  const colChars=[6,20,16,18,18,15,9,20];
+  const wEmu=i=>{ const ch=i<colChars.length?colChars[i]:8.43; return Math.round((ch*7+5)*9525); };
+  const tableW=colChars.reduce((a,_,i)=>a+wEmu(i),0);
+  const sc=Math.min(tableW/L.W, 1.4);
+  const W=Math.max(1,Math.round(L.W*sc)), H=Math.max(1,Math.round(L.H*sc));
+  // بلا رسم مخبّأ — Excel يعيد حساب التخطيط من data1+layout1 (كما يفعل Word)
+  const art=buildOrgSmartArt(hrRows, W, H, null);
+  if(!art) return null;
+
+  const zip=await JSZip.loadAsync(buffer);
+  const wbXml=await zip.file('xl/workbook.xml').async('string');
+  const relsXml=await zip.file('xl/_rels/workbook.xml.rels').async('string');
+  const m=wbXml.match(/<sheet[^>]*name="الموارد البشرية"[^>]*r:id="([^"]+)"/);
+  if(!m) return null;
+  const rm=relsXml.match(new RegExp('<Relationship[^>]*Id="'+m[1]+'"[^>]*Target="([^"]+)"'));
+  if(!rm) return null;
+  const baseName=rm[1].split('/').pop();
+  const sheetFile='xl/worksheets/'+baseName;
+
+  // أجزاء diagram (data + الأجزاء الأصلية + الرسم المخبّأ)
+  zip.file('xl/diagrams/data1.xml', art.dataXml);
+  zip.file('xl/diagrams/layout1.xml', DGM_LAYOUT_XML);
+  zip.file('xl/diagrams/quickStyle1.xml', DGM_QS_XML);
+  zip.file('xl/diagrams/colors1.xml', DGM_COLORS_XML);
+
+  // رسم الورقة: graphicFrame مرساة بخليّتين — مطابق لما يُنتجه Excel (ext=0,0)
+  const xOff=Math.max(0,Math.round((tableW-W)/2));
+  const RH=266700;
+  const sfr=emu=>{ let c=0,acc=0; while(c<400){ const w=wEmu(c); if(acc+w>emu) return {col:c,off:Math.max(0,Math.round(emu-acc))}; acc+=w; c++; } return {col:c,off:0}; };
+  const srow=y=>{ let r=top0,acc=0; while(acc+RH<=y && r<top0+800){ acc+=RH; r++; } return {row:r,off:Math.max(0,Math.round(y-acc))}; };
+  const f=sfr(xOff), t=sfr(xOff+W), fr=srow(0), tr=srow(H);
+  const frameXml=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n`+
+    `<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="${NS_A}">`+
+    `<xdr:twoCellAnchor><xdr:from><xdr:col>${f.col}</xdr:col><xdr:colOff>${f.off}</xdr:colOff><xdr:row>${fr.row}</xdr:row><xdr:rowOff>${fr.off}</xdr:rowOff></xdr:from>`+
+    `<xdr:to><xdr:col>${t.col}</xdr:col><xdr:colOff>${t.off}</xdr:colOff><xdr:row>${tr.row}</xdr:row><xdr:rowOff>${tr.off}</xdr:rowOff></xdr:to>`+
+    `<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Diagram 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>`+
+    `<xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm>`+
+    `<a:graphic><a:graphicData uri="${NS_DGM}"><dgm:relIds xmlns:dgm="${NS_DGM}" xmlns:r="${NS_R}" r:dm="rId1" r:lo="rId2" r:qs="rId3" r:cs="rId4"/></a:graphicData></a:graphic>`+
+    `<xdr:clientData/></xdr:graphicFrame></xdr:twoCellAnchor></xdr:wsDr>`;
+  const drawCount=Object.keys(zip.files).filter(f=>/^xl\/drawings\/drawing\d+\.xml$/.test(f)).length;
+  const drawName='drawing'+(drawCount+1)+'.xml';
+  zip.file('xl/drawings/'+drawName, frameXml);
+
+  // rels لجزء الرسم: dm/lo/qs/cs + الرسم المخبّأ (rId5) — مطابق لمرجع Excel
+  zip.file('xl/drawings/_rels/'+drawName+'.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`+
+    `<Relationship Id="rId1" Type="${REL_DGM_BASE}diagramData" Target="../diagrams/data1.xml"/>`+
+    `<Relationship Id="rId2" Type="${REL_DGM_BASE}diagramLayout" Target="../diagrams/layout1.xml"/>`+
+    `<Relationship Id="rId3" Type="${REL_DGM_BASE}diagramQuickStyle" Target="../diagrams/quickStyle1.xml"/>`+
+    `<Relationship Id="rId4" Type="${REL_DGM_BASE}diagramColors" Target="../diagrams/colors1.xml"/>`+
+    `</Relationships>`);
+
+  // ربط الورقة بالرسم
+  const relPath='xl/worksheets/_rels/'+baseName+'.rels';
+  let sheetRels = zip.file(relPath) ? await zip.file(relPath).async('string')
+    : '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
+  const drawRelId='rIdOrgDraw'+(drawCount+1);
+  sheetRels=sheetRels.replace('</Relationships>', `<Relationship Id="${drawRelId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/${drawName}"/></Relationships>`);
+  zip.file(relPath, sheetRels);
+  let sxml=await zip.file(sheetFile).async('string');
+  if(!/<drawing /.test(sxml)) sxml=sxml.replace('</worksheet>', `<drawing r:id="${drawRelId}"/></worksheet>`);
+  zip.file(sheetFile, sxml);
+
+  // أنواع المحتوى
+  let ct=await zip.file('[Content_Types].xml').async('string');
+  const addCT=(pn,type)=>{ if(!ct.includes(`PartName="${pn}"`)) ct=ct.replace('</Types>',`<Override PartName="${pn}" ContentType="${type}"/></Types>`); };
+  addCT('/xl/drawings/'+drawName,'application/vnd.openxmlformats-officedocument.drawing+xml');
+  addCT('/xl/diagrams/data1.xml',CT_DGM.data);
+  addCT('/xl/diagrams/layout1.xml',CT_DGM.lo);
+  addCT('/xl/diagrams/quickStyle1.xml',CT_DGM.qs);
+  addCT('/xl/diagrams/colors1.xml',CT_DGM.cs);
+  zip.file('[Content_Types].xml', ct);
+
+  return zip.generateAsync({type:'nodebuffer', compression:'DEFLATE'});
+}
+
 async function injectExcelOrgChart(buffer, hrRows){
+  // ملاحظة: SmartArt حقيقي في Excel غير عملي — Excel (خلافاً لـ Word) لا يعيد حساب
+  // التخطيط ويتطلّب «رسماً مخبّأ» تتطابق مُعرّفاته مع عُقَد العرض (type="pres") التي
+  // يولّدها محرّك التخطيط؛ تأليفها يدوياً غير موثوق. لذا نستخدم رسم الأشكال (يطابق الشكل).
+  // (دالة injectExcelSmartArt محفوظة للرجوع إليها لكنها غير مُستدعاة.)
   try{
     const {persons}=buildPersons(hrRows); if(!persons.length) return buffer;
-    const top0=2;
+    // يبدأ الهيكل تحت جدول الموارد البشرية: شريط(1) + رؤوس(3) + الصفوف + صف الإجمالي + صف فاصل
+    const top0=(hrRows||[]).length+5;
     const drawing=buildExcelOrgDrawingXml(hrRows, top0); if(!drawing) return buffer;
     const zip=await JSZip.loadAsync(buffer);
     const wbXml=await zip.file('xl/workbook.xml').async('string');
     const relsXml=await zip.file('xl/_rels/workbook.xml.rels').async('string');
-    const m=wbXml.match(/<sheet[^>]*name="الهيكل التنظيمي"[^>]*r:id="([^"]+)"/);
+    const m=wbXml.match(/<sheet[^>]*name="الموارد البشرية"[^>]*r:id="([^"]+)"/);
     if(!m) return buffer;
     const rm=relsXml.match(new RegExp('<Relationship[^>]*Id="'+m[1]+'"[^>]*Target="([^"]+)"'));
     if(!rm) return buffer;
@@ -1048,10 +1290,10 @@ function buildFinanceDashXml(summary){
   const payback=(net>0&&ft>0)?paybackPhrase(ft/net):'—';
   const margin=rv>0?net/rv*100:0, roi=ft>0?net/ft*100:0;
   const costs=opsA+fxA+dep, costsPct=rv>0?costs/rv*100:0, profitPct=rv>0?net/rv*100:0;
-  const PW=16838*635, MX=600000, CW=PW-2*MX, gap=170000;
+  const PW=16838*635, MX=600000, CW=PW-2*MX, gap=150000;
   _fwz=7000; let s='';
-  // 1) KPI cards
-  const cw=(CW-4*gap)/5, ch=1080000, top=1230000;
+  // 1) KPI cards (top نازل تحت سطر عدد الموظفين، والمجموع مضغوط كي لا يلامس فوتر الترويسة)
+  const cw=(CW-4*gap)/5, ch=1020000, top=1600000;
   const cards=[['الإيرادات السنوية',summary.revenueAnnual||'$0'],['التكاليف التشغيلية',summary.opsAnnual||'$0'],
                ['التكاليف الثابتة',summary.fixedAnnual||'$0'],['الاهتلاك السنوي',summary.depreciation||'$0'],
                ['التكاليف التأسيسية',summary.foundingTotal||'$0']];
@@ -1060,7 +1302,7 @@ function buildFinanceDashXml(summary){
   const ny=top+ch+gap, nh=820000;
   s+=fwRect(MX,ny,CW,nh,FW.navy,[{text:'صافي الربح السنوي',sz:24,bold:false,color:FW.netLbl},{text:summary.netProfit||'$0',sz:48,bold:true,color:FW.orange}],{radius:14000});
   // 3) payback card + two donut gauges
-  const by=ny+nh+gap, bw=(CW-2*gap)/3, bh=1380000;
+  const by=ny+nh+gap, bw=(CW-2*gap)/3, bh=1280000;
   s+=fwRect(MX,by,bw,bh,FW.card,[{text:'فترة استرداد رأس المال',sz:24,bold:false,color:FW.muted},{text:payback,sz:34,bold:true,color:FW.navy}],{radius:14000});
   s+=fwRect(MX+bw+gap,by,bw,bh,'FFFFFF',null,{line:FW.track,radius:14000});
   s+=fwRing(MX+bw+gap+bw/2, by+bh/2, 560000, margin, FW.blue, 'هامش الربح', f1(margin)+'%');
