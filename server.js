@@ -1,948 +1,1609 @@
-'use strict';
+/**
+ * ─────────────────────────────────────────────────────────────
+ *  نموذج طرح دراسة مشروع — Backend Server v2
+ *  Express · docx · ExcelJS · Nodemailer
+ * ─────────────────────────────────────────────────────────────
+ */
 
-// فرض ترتيب IPv4 أولاً في حلّ DNS — يعالج انقطاع الاتصال بخوادم Google
-// (oauth2.googleapis.com / sheets.googleapis.com) عبر IPv6 المعطّل على بعض الاستضافات
-// الذي يظهر كخطأ «Premature close / ECONNRESET». يجب أن يسبق أي اتصال شبكي.
-try { require('dns').setDefaultResultOrder('ipv4first'); } catch (e) { /* إصدار Node لا يدعمه */ }
+const express    = require('express');
+const cors       = require('cors');
+const fs         = require('fs');
+const path       = require('path');
+const crypto     = require('crypto');
+const nodemailer = require('nodemailer');
+const ExcelJS    = require('exceljs');
+const JSZip      = require('jszip');
+const {
+  Document, Packer, Paragraph, TextRun,
+  Table, TableRow, TableCell,
+  AlignmentType, WidthType, ShadingType,
+  BorderStyle, VerticalAlign, PageOrientation,
+  Header, ImageRun, PageBreak,
+  HorizontalPositionRelativeFrom, VerticalPositionRelativeFrom,
+  HorizontalPositionAlign
+} = require('docx');
 
-require('dotenv').config();
-
-const path = require('path');
-const fs = require('fs');
-const express = require('express');
-const session = require('express-session');
-const sheets = require('./lib/sheets');
-const auth = require('./lib/auth');
-const notify = require('./lib/notify');
-const store = require('./lib/store');
-const calendar = require('./lib/calendar');
-const drive = require('./lib/drive');
-const telegram = require('./lib/telegram');
-const { TZ } = require('./lib/dates');
-
-// طابع زمني «YYYY-MM-DD HH:MM» بتوقيت دمشق (أرقام لاتينية)
-function nowStamp() {
-  const d = new Date();
-  const date = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
-  const time = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false }).format(d);
-  return `${date} ${time}`;
+// ── Assets (letterhead image + SmartArt diagram templates) ───
+const ASSETS_DIR = path.join(__dirname, 'assets');
+function readAsset(rel) {
+  try { return fs.readFileSync(path.join(ASSETS_DIR, rel)); } catch { return null; }
 }
+const LETTERHEAD_PNG = readAsset('letterhead.png');
 
-function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+// أجزاء SmartArt الأصلية (Organisation Chart) المستخرجة من Office — تُعاد كما هي،
+// بينما يُولَّد data1.xml و drawing1.xml لكل طلب. غيابها = العودة لرسم الأشكال.
+const DGM_LAYOUT_XML   = readAsset('diagrams/orgchart-layout.xml');
+const DGM_QS_XML       = readAsset('diagrams/orgchart-quickstyle.xml');
+const DGM_COLORS_XML   = readAsset('diagrams/orgchart-colors.xml');
+const OFFICE_THEME_XML = readAsset('diagrams/office-theme.xml');
+const SMARTART_OK = !!(DGM_LAYOUT_XML && DGM_QS_XML && DGM_COLORS_XML);
 
-// اسم المستخدم الكامل المستخدَم في سجلّ الأحداث (الاسم الكامل لا الأول فقط)
-function authorName(u) {
-  return (u && (String(u.name || '').trim() || [u.firstName, u.lastName].filter(Boolean).join(' ').trim())) || 'مستخدم';
-}
-
-const ROLES = ['viewer', 'editor', 'admin'];
-const REMINDER_METHODS = ['email', 'push', 'calendar', 'telegram'];
-const REMINDER_OFFSETS = ['morning', '1d', '3d', '7d'];
-
-const app = express();
+const app  = express();
 const PORT = process.env.PORT || 3000;
 
-app.set('trust proxy', 1); // خلف وكيل Render
-app.use(express.json({ limit: '12mb' })); // يتّسع لرفع المرفقات (base64)
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'dev-secret-change-me',
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-  },
-}));
+// ── Directories ──────────────────────────────────────────────
+const DATA_DIR = path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-// صفحات عامة لا تتطلب دخولاً
-const PUBLIC_FILES = new Set(['/login.html', '/styles.css']);
-
-// بوابة الصفحة الرئيسية: تحويل لتسجيل الدخول عند تفعيل المصادقة وعدم وجود جلسة
-app.get('/', (req, res, next) => {
-  if (auth.authEnabled() && !(req.session && req.session.user)) {
-    return res.redirect('/login.html');
-  }
-  next();
-});
-
+app.use(cors());
+app.use(express.json({ limit: '20mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ===== المصادقة =====
-function requireAuth(req, res, next) {
-  if (!auth.authEnabled()) return next(); // إن لم تُضبط حسابات، يبقى مفتوحاً
-  if (req.session && req.session.user) return next();
-  res.status(401).json({ ok: false, error: 'يجب تسجيل الدخول' });
+// ── Helpers ──────────────────────────────────────────────────
+function genId() {
+  return Date.now().toString(36).toUpperCase() + '-' +
+         crypto.randomBytes(3).toString('hex').toUpperCase();
 }
-function requireRole(min) {
-  return (req, res, next) => {
-    if (!auth.authEnabled()) return next();
-    if (auth.hasRole(req.session.user, min)) return next();
-    res.status(403).json({ ok: false, error: 'صلاحيتك لا تسمح بهذا الإجراء' });
-  };
+function loadIndex() {
+  const p = path.join(DATA_DIR, 'index.json');
+  if (!fs.existsSync(p)) return [];
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return []; }
 }
+function saveIndex(index) {
+  fs.writeFileSync(path.join(DATA_DIR, 'index.json'), JSON.stringify(index, null, 2), 'utf8');
+}
+const MONTHS = ['شهر 1','شهر 2','شهر 3','شهر 4','شهر 5','شهر 6',
+                'شهر 7','شهر 8','شهر 9','شهر 10','شهر 11','شهر 12'];
 
-app.post('/api/login', async (req, res) => {
-  try {
-    const { email, password } = req.body || {};
-    const user = await auth.verify(email, password);
-    if (!user) return res.status(401).json({ ok: false, error: 'البريد أو كلمة المرور غير صحيحة' });
-    req.session.user = user;
-    const profiles = await availableProfilesFor(user);
-    req.session.profile = profiles[0] ? profiles[0].tab : DEFAULT_TAB; // افتراضي (يُغيّره الاختيار)
-    res.json({ ok: true, user, profiles, needProfile: profiles.length > 1 });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+// ════════════════════════════════════════════════════════════
+//  EXCEL GENERATOR
+// ════════════════════════════════════════════════════════════
+async function generateExcel(data) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'نموذج دراسة مشروع'; wb.created = new Date();
+
+  const F='Sakkal Majalla';
+  const NAVY='FF1F3864', ORANGE='FFED7D31', BLUE='FF2F5496', LIGHT='FFF1F5F9',
+        SUMLBL='FFDEEAF6', SUMVAL='FFFBE4D5', GREENc='FF538135', GRAYc='FF94A3B8',
+        WHITE='FFFFFFFF', COLHDR='FFD9E2F3', STRIPE='FFEFF3FA';
+  const INPUT='FF0000FF', FORMULA='FF000000', LINK='FF008000';
+  const PRODCLR=['FFD9E2F3','FFFCE4D6','FFE2EFDA','FFFFF2CC','FFDBE5F1'];
+  const MONEY='"$"#,##0.00;[Red]("$"#,##0.00);"-"', MONEY0='"$"#,##0;[Red]("$"#,##0);"-"', PCT='0.0%';
+  const pm = s => parseFloat(String(s==null?'0':s).replace(/[^0-9.\-]/g,''))||0;
+  const thin=()=>({top:{style:'thin',color:{argb:'FFBFBFBF'}},bottom:{style:'thin',color:{argb:'FFBFBFBF'}},left:{style:'thin',color:{argb:'FFBFBFBF'}},right:{style:'thin',color:{argb:'FFBFBFBF'}}});
+  const fill=c=>({type:'pattern',pattern:'solid',fgColor:{argb:c}});
+  const colL=n=>{let s='';while(n>0){const m=(n-1)%26;s=String.fromCharCode(65+m)+s;n=(n-m-1)/26;}return s;};
+  const Q=name=>`'${name}'`;
+
+  function band(ws,lastCol,text,sub){
+    ws.mergeCells(1,1,1,lastCol);
+    const t=ws.getCell(1,1); t.value=text; t.font={bold:true,size:18,color:{argb:WHITE},name:F};
+    t.fill=fill(NAVY); t.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; ws.getRow(1).height=34;
+    if(sub!==undefined){ ws.mergeCells(2,1,2,lastCol); const s=ws.getCell(2,1); s.value=sub;
+      s.font={bold:true,size:12,color:{argb:NAVY},name:F}; s.fill=fill('FFF4D9B0');
+      s.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; ws.getRow(2).height=20; }
   }
-});
-
-app.post('/api/logout', (req, res) => {
-  req.session.destroy(() => res.json({ ok: true }));
-});
-
-app.get('/api/me', async (req, res) => {
-  if (!auth.authEnabled()) return res.json({ ok: true, user: { name: 'زائر', role: 'admin' }, authDisabled: true, storeEnabled: store.enabled, attachmentsEnabled: drive.enabled, telegramEnabled: telegram.enabled, telegramBot: process.env.TELEGRAM_BOT_USERNAME || '' });
-  if (!(req.session && req.session.user)) return res.status(401).json({ ok: false, error: 'غير مسجّل الدخول' });
-  const user = { ...req.session.user };
-  // رمز التقويم الشخصي + حالة ربط تيليجرام
-  if (store.enabled) {
-    try {
-      const full = (await store.getUsersFull()).find((u) => u.email.toLowerCase() === user.email.toLowerCase());
-      if (full) { user.calToken = full.token; user.phone = full.phone || user.phone || ''; user.telegramLinked = !!full.telegramChatId; }
-    } catch { /* تجاهل */ }
+  function colHeaders(ws,rowIdx,headers,widths){
+    if(widths) ws.columns=widths.map(w=>({width:w}));
+    const hr=ws.getRow(rowIdx); hr.height=30;
+    headers.forEach((h,i)=>{ const c=hr.getCell(i+1); c.value=h;
+      c.font={bold:true,color:{argb:WHITE},name:F,size:12}; c.fill=fill(NAVY);
+      c.alignment={horizontal:'center',vertical:'middle',wrapText:true,readingOrder:2}; c.border=thin(); });
   }
-  const profiles = await availableProfilesFor(req.session.user);
-  res.json({ ok: true, user, storeEnabled: store.enabled, attachmentsEnabled: drive.enabled, telegramEnabled: telegram.enabled, telegramBot: process.env.TELEGRAM_BOT_USERNAME || '', profile: activeTab(req), profiles });
-});
+  function dcell(ws,r,c,val,o){ o=o||{}; const cell=ws.getCell(r,c); cell.value=val;
+    const isNum=(typeof val==='number')||(val&&typeof val==='object'&&'formula' in val);
+    cell.font={name:F,size:12,bold:o.bold||isNum,color:{argb:o.color||FORMULA}};
+    cell.alignment={horizontal:'center',vertical:'middle',readingOrder:2,wrapText:true};
+    cell.border=thin(); if(o.numFmt)cell.numFmt=o.numFmt; if(o.bg)cell.fill=fill(o.bg); return cell; }
+  function totalRow(ws,rowIdx,fromC,toC,label,valCol,value,numFmt){ numFmt=numFmt||MONEY;
+    ws.mergeCells(rowIdx,fromC,rowIdx,toC);
+    const l=ws.getCell(rowIdx,fromC); l.value=label; l.font={bold:true,name:F,size:13,color:{argb:NAVY}};
+    l.fill=fill(SUMLBL); l.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; l.border=thin();
+    const v=ws.getCell(rowIdx,valCol); v.value=value; v.numFmt=numFmt; v.font={bold:true,name:F,size:13,color:{argb:NAVY}};
+    v.fill=fill(SUMVAL); v.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; v.border=thin();
+    ws.getRow(rowIdx).height=24; }
 
-// البروفايلات المتاحة للمستخدم الحالي
-app.get('/api/profiles', requireAuth, async (req, res) => {
-  try { res.json({ ok: true, profiles: await availableProfilesFor(req.session.user), active: activeTab(req) }); }
-  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
-});
+  const SN={app:'معلومات المقدّم',proj:'معلومات المشروع',sum:'الخلاصة المالية السنوية',found:'التكاليف التأسيسية',prod:'المنتجات',
+    mkt:'التسويق والمبيع',rev:'الإيرادات',ops:'التكاليف التشغيلية',hr:'الموارد البشرية',fixed:'التكاليف الثابتة',dep:'الاهتلاك'};
+  const wsApp=wb.addWorksheet(SN.app,{views:[{rightToLeft:true}]});
+  const wsProj=wb.addWorksheet(SN.proj,{views:[{rightToLeft:true}]});
+  const wsMkt=wb.addWorksheet(SN.mkt,{views:[{rightToLeft:true}]});
+  const wsFound=wb.addWorksheet(SN.found,{views:[{rightToLeft:true}]});
+  const wsProd=wb.addWorksheet(SN.prod,{views:[{rightToLeft:true}]});
+  const wsRev=wb.addWorksheet(SN.rev,{views:[{rightToLeft:true}]});
+  const wsOps=wb.addWorksheet(SN.ops,{views:[{rightToLeft:true}]});
+  const wsHR=wb.addWorksheet(SN.hr,{views:[{rightToLeft:true}]});
+  const wsFixed=wb.addWorksheet(SN.fixed,{views:[{rightToLeft:true}]});
+  const wsDep=wb.addWorksheet(SN.dep,{views:[{rightToLeft:true}]});
+  const wsSum=wb.addWorksheet(SN.sum,{views:[{rightToLeft:true}]});
 
-// اختيار البروفايل النشط للجلسة (يجب أن يكون ضمن المتاح للمستخدم)
-app.post('/api/profile', requireAuth, async (req, res) => {
-  try {
-    const tab = String((req.body && req.body.profile) || '').trim();
-    const profiles = await availableProfilesFor(req.session.user);
-    if (!profiles.some((p) => p.tab === tab)) return res.status(400).json({ ok: false, error: 'بروفايل غير متاح' });
-    req.session.profile = tab;
-    res.json({ ok: true, profile: tab });
-  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
-});
+  const refs={}; const revQtyRow={};
 
-// قائمة المستخدمين (للاختيار كمسؤول معني) — متاحة لكل مسجّل دخول، تُعيد الاسم والبريد فقط
-app.get('/api/users/list', requireAuth, async (req, res) => {
-  try {
-    const users = (await auth.listUsers()).filter((u) => u.active !== false);
-    res.json({ ok: true, users: users.map((u) => ({ name: u.name, email: u.email, firstName: u.firstName, lastName: u.lastName })) });
-  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
-});
+  // FOUNDING
+  { const ws=wsFound; band(ws,8,'التكاليف التأسيسية');
+    colHeaders(ws,3,['#','الصنف','البيان','اهتلاك','ملاحظات','التكلفة للواحدة ($)','العدد','التكلفة الإجمالية ($)'],[6,16,24,9,22,18,9,20]);
+    const rows=data.foundingRows||[];
+    rows.forEach((r,i)=>{ const R=4+i, sbg=i%2?STRIPE:undefined;
+      dcell(ws,R,1,i+1,{bg:sbg}); dcell(ws,R,2,r.cat||'',{bg:sbg}); dcell(ws,R,3,r.bayan||'',{bg:sbg});
+      dcell(ws,R,4,r.dep?'✓':'',{bg:sbg}); dcell(ws,R,5,r.notes||'',{bg:sbg});
+      dcell(ws,R,6,pm(r.price),{numFmt:MONEY,color:INPUT,bg:sbg}); dcell(ws,R,7,pm(r.qty),{color:INPUT,bg:sbg});
+      dcell(ws,R,8,{formula:`F${R}*G${R}`},{numFmt:MONEY,bg:sbg}); });
+    const tr=4+rows.length; totalRow(ws,tr,1,7,'الإجمالي',8,rows.length?{formula:`SUM(H4:H${tr-1})`}:0);
+    refs.founding=`${Q(SN.found)}!$H$${tr}`; }
 
-// تعديل المستخدم لحسابه هو (الاسم + كلمة المرور) — لا يمسّ الدور ولا التفعيل
-app.patch('/api/account', requireAuth, async (req, res) => {
-  try {
-    if (!store.enabled) return res.status(400).json({ ok: false, error: 'التخزين الدائم غير مفعّل (اضبط DATA_SHEET_ID).' });
-    const me = req.session.user;
-    const patch = {};
-    const { firstName, lastName, password, phone } = req.body || {};
-    if (firstName != null) patch.firstName = String(firstName).trim();
-    if (lastName != null) patch.lastName = String(lastName).trim();
-    if (phone != null) patch.phone = String(phone).trim();
-    if (password) patch.hash = await auth.hashPassword(password);
-    await store.updateUser(String(me.email).toLowerCase(), patch);
-    if (phone != null) me.phone = String(phone).trim();
-    // تحديث الجلسة بالاسم الجديد
-    if (patch.firstName != null || patch.lastName != null) {
-      const fn = patch.firstName != null ? patch.firstName : me.firstName;
-      const ln = patch.lastName != null ? patch.lastName : (me.lastName || '');
-      me.firstName = fn;
-      me.name = `${fn} ${ln}`.trim() || me.name;
-      req.session.user = me;
-    }
-    res.json({ ok: true, user: { name: me.name, firstName: me.firstName, role: me.role, email: me.email } });
-  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
-});
+  // HR
+  { const ws=wsHR; band(ws,8,'الموارد البشرية');
+    colHeaders(ws,3,['#','المنصب','النوع','تابع لـ','الراتب الشهري الفردي ($)','أشهر الدوام/السنة','العدد','الراتب الشهري الإجمالي ($)'],[6,20,16,18,18,15,9,20]);
+    const rows=data.hrRows||[];
+    rows.forEach((r,i)=>{ const R=4+i, sbg=i%2?STRIPE:undefined;
+      dcell(ws,R,1,i+1,{bg:sbg}); dcell(ws,R,2,r.position||'',{bg:sbg}); dcell(ws,R,3,r.type||'',{bg:sbg}); dcell(ws,R,4,r.reports||'',{bg:sbg});
+      dcell(ws,R,5,pm(r.salary),{numFmt:MONEY,color:INPUT,bg:sbg}); dcell(ws,R,6,pm(r.months)||12,{color:INPUT,bg:sbg});
+      dcell(ws,R,7,pm(r.qty),{color:INPUT,bg:sbg}); dcell(ws,R,8,{formula:`E${R}*G${R}`},{numFmt:MONEY,bg:sbg}); });
+    const tr=4+rows.length;
+    totalRow(ws,tr,1,7,'إجمالي الرواتب (سنوياً)',8, rows.length?{formula:`SUMPRODUCT(E4:E${tr-1},G4:G${tr-1},F4:F${tr-1})`}:0);
+    refs.hrAnnual=`${Q(SN.hr)}!$H$${tr}`; }
 
-// ===== إدارة المستخدمين (مدير) =====
-app.get('/api/admin/users', requireAuth, requireRole('admin'), async (req, res) => {
-  try { res.json({ ok: true, users: await auth.listUsers(), storeEnabled: store.enabled }); }
-  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
-});
+  // MARKETING
+  { const ws=wsMkt; band(ws,4,'التسويق والمبيع'); ws.columns=[{width:24},{width:28},{width:28},{width:28}];
+    let R=3;
+    const lv=(label,val,o)=>{ o=o||{}; ws.mergeCells(R,2,R,4);
+      const l=ws.getCell(R,1); l.value=label; l.font={bold:true,name:F,size:12,color:{argb:NAVY}}; l.fill=fill(SUMLBL); l.alignment={horizontal:'center',vertical:'middle',readingOrder:2,wrapText:true}; l.border=thin();
+      const v=ws.getCell(R,2); v.value=val; const isNum=(typeof val==='number')||(val&&typeof val==='object'&&'formula' in val);
+      v.font={name:F,size:12,color:{argb:o.color||FORMULA},bold:o.bold||isNum}; v.fill=fill(o.bg||SUMVAL);
+      v.alignment={horizontal:'center',vertical:'middle',readingOrder:2,wrapText:true}; v.border=thin(); if(o.numFmt)v.numFmt=o.numFmt;
+      ws.getRow(R).height=o.h||24; R++; };
+    lv('خطة التسويق', data.marketingPlan||'—',{h:40});
+    const mktRow=R; lv('كلفة التسويق الشهرية ($)', pm(data.marketingCost), {numFmt:MONEY,color:INPUT});
+    lv('كلفة التسويق السنوية ($)', {formula:`B${mktRow}*12`}, {numFmt:MONEY});
+    lv('قنوات المبيع', data.salesChannels||'—',{h:36});
+    refs.mktMonthly=`${Q(SN.mkt)}!$B$${mktRow}`; R++;
+    const comps=(data.competitors||[]).filter(c=>c&&(c.name||c.strengths||c.weaknesses));
+    if(comps.length){ ws.mergeCells(R,1,R,4); const h=ws.getCell(R,1); h.value='جدول المنافسين'; h.font={bold:true,color:{argb:WHITE},name:F,size:13}; h.fill=fill(NAVY); h.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; ws.getRow(R).height=26; R++;
+      ['#','اسم المنافس','نقاط القوة','نقاط الضعف'].forEach((t,i)=>{ const c=ws.getCell(R,i+1); c.value=t; c.font={bold:true,color:{argb:WHITE},name:F,size:12}; c.fill=fill(BLUE); c.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; c.border=thin(); }); R++;
+      comps.forEach((cp,i)=>{ const sbg=i%2?STRIPE:undefined; dcell(ws,R,1,i+1,{bg:sbg}); dcell(ws,R,2,cp.name||'',{bg:sbg}); dcell(ws,R,3,cp.strengths||'',{bg:sbg}); dcell(ws,R,4,cp.weaknesses||'',{bg:sbg}); R++; }); } }
 
-app.post('/api/admin/users', requireAuth, requireRole('admin'), async (req, res) => {
-  try {
-    if (!store.enabled) return res.status(400).json({ ok: false, error: 'التخزين الدائم غير مفعّل (اضبط DATA_SHEET_ID).' });
-    const { email, name, firstName, lastName, password, role, profiles, phone } = req.body || {};
-    if (!email || !password) return res.status(400).json({ ok: false, error: 'البريد وكلمة المرور مطلوبان' });
-    if (!ROLES.includes(role)) return res.status(400).json({ ok: false, error: 'دور غير صالح' });
-    const hash = await auth.hashPassword(password);
-    await store.addUser({ email: String(email).trim().toLowerCase(), name, firstName, lastName, role, hash, profiles: Array.isArray(profiles) ? profiles : [], phone });
-    res.json({ ok: true });
-  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
-});
+  // PRODUCTS (Word-style)
+  const pids=Object.keys(data.products||{}).filter(p=>data.products[p]?.name);
+  { const ws=wsProd; band(ws,3,'المنتجات'); colHeaders(ws,3,['البيان','الواحدة','المكوّن'],[28,14,52]);
+    let R=4;
+    pids.forEach((pid,pi)=>{ const p=data.products[pid]; const comps=(p.components||[]).filter(c=>c);
+      const clr=PRODCLR[pi%PRODCLR.length]; const n=Math.max(comps.length,1); const start=R;
+      (comps.length?comps:['—']).forEach((comp)=>{ dcell(ws,R,3,comp,{bg:clr,color:NAVY}); R++; });
+      ws.mergeCells(start,1,start+n-1,1); ws.mergeCells(start,2,start+n-1,2);
+      const nameC=ws.getCell(start,1); nameC.value=p.name||''; nameC.font={bold:true,name:F,size:12,color:{argb:NAVY}}; nameC.fill=fill(clr); nameC.alignment={horizontal:'center',vertical:'middle',readingOrder:2,wrapText:true}; nameC.border=thin();
+      const unitC=ws.getCell(start,2); unitC.value=p.unit||''; unitC.font={bold:true,name:F,size:12,color:{argb:NAVY}}; unitC.fill=fill(clr); unitC.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; unitC.border=thin(); }); }
 
-app.patch('/api/admin/users/:email', requireAuth, requireRole('admin'), async (req, res) => {
-  try {
-    if (!store.enabled) return res.status(400).json({ ok: false, error: 'التخزين الدائم غير مفعّل.' });
-    const patch = {};
-    const { name, firstName, lastName, role, active, password, email: newEmail } = req.body || {};
-    if (name != null) patch.name = name;
-    if (firstName != null) patch.firstName = firstName;
-    if (lastName != null) patch.lastName = lastName;
-    if (role != null) { if (!ROLES.includes(role)) return res.status(400).json({ ok: false, error: 'دور غير صالح' }); patch.role = role; }
-    if (active != null) patch.active = !!active;
-    if (password) patch.hash = await auth.hashPassword(password);
-    if (req.body && Array.isArray(req.body.profiles)) patch.profiles = req.body.profiles;
-    if (req.body && req.body.phone != null) patch.phone = String(req.body.phone).trim();
-    if (newEmail != null && String(newEmail).trim() && String(newEmail).trim().toLowerCase() !== String(req.params.email).toLowerCase()) {
-      const ne = String(newEmail).trim().toLowerCase();
-      const all = (await store.getUsersFull()) || [];
-      if (all.some((u) => u.email.toLowerCase() === ne)) return res.status(400).json({ ok: false, error: 'البريد الجديد مستخدم مسبقاً' });
-      patch.email = ne;
-    }
-    await store.updateUser(String(req.params.email).toLowerCase(), patch);
-    res.json({ ok: true });
-  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
-});
+  // REVENUE
+  { const ws=wsRev; band(ws,15,'الإيرادات المتوقعة');
+    colHeaders(ws,3,['البيان','الواحدة',...MONTHS,'الإجمالي السنوي ($)'],[26,9,...MONTHS.map(()=>11),16]);
+    let R=4; const prodAnnual=[];
+    pids.forEach((pid,pi)=>{ const p=data.products[pid]; const rev=data.revenueData?.[pid]||[];
+      const qR=R,pR=R+1,tR=R+2; revQtyRow[pid]=qR; const clr=PRODCLR[pi%PRODCLR.length];
+      dcell(ws,qR,1,(p.name||'')+' — الكمية',{bg:clr}); dcell(ws,qR,2,p.unit||'',{bg:clr});
+      dcell(ws,pR,1,(p.name||'')+' — سعر الوحدة',{bg:LIGHT}); dcell(ws,pR,2,'$',{bg:LIGHT});
+      dcell(ws,tR,1,(p.name||'')+' — الإجمالي',{bg:SUMLBL,bold:true}); dcell(ws,tR,2,'',{bg:SUMLBL});
+      for(let m=0;m<12;m++){ const col=3+m,Lc=colL(col);
+        dcell(ws,qR,col,(rev[m]&&pm(rev[m].qty))||0,{color:INPUT,bg:clr});
+        dcell(ws,pR,col,(rev[m]&&pm(rev[m].unitPrice))||0,{numFmt:MONEY,color:INPUT,bg:LIGHT});
+        dcell(ws,tR,col,{formula:`${Lc}${qR}*${Lc}${pR}`},{numFmt:MONEY,bg:SUMLBL}); }
+      dcell(ws,qR,15,'',{bg:clr}); dcell(ws,pR,15,'',{bg:LIGHT});
+      dcell(ws,tR,15,{formula:`SUM(C${tR}:N${tR})`},{numFmt:MONEY,bg:SUMVAL,bold:true});
+      prodAnnual.push(`O${tR}`); R+=3; });
+    const tr=R; totalRow(ws,tr,1,14,'إجمالي الإيرادات السنوية',15, prodAnnual.length?{formula:prodAnnual.join('+')}:0);
+    refs.revAnnual=`${Q(SN.rev)}!$O$${tr}`; }
 
-// إدارة البروفايلات (مدير): عرض + إضافة بروفايل جديد (يُنشئ تبويباً جديداً تلقائياً)
-app.get('/api/admin/profiles', requireAuth, requireRole('admin'), async (req, res) => {
-  try { res.json({ ok: true, profiles: await store.getProfiles() }); }
-  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
-});
-app.post('/api/admin/profiles', requireAuth, requireRole('admin'), async (req, res) => {
-  try {
-    if (!store.enabled) return res.status(400).json({ ok: false, error: 'التخزين الدائم غير مفعّل.' });
-    if (!sheets.canWrite) return res.status(400).json({ ok: false, error: 'الكتابة على الشيت معطّلة.' });
-    const label = String((req.body && req.body.label) || '').trim();
-    if (!label) return res.status(400).json({ ok: false, error: 'اسم البروفايل مطلوب' });
-    // اسم التبويب = اسم البروفايل
-    await sheets.createProfileTab(label);  // ينشئ التبويب بنفس بنية الجدول
-    const prof = await store.addProfile(label, label);
-    res.json({ ok: true, profile: prof });
-  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
-});
+  // OPERATING COSTS (unit cost × revenue qty)
+  { const ws=wsOps; band(ws,15,'التكاليف التشغيلية');
+    colHeaders(ws,3,['المنتج / المكوّن','',...MONTHS,'الإجمالي السنوي ($)'],[26,9,...MONTHS.map(()=>11),16]);
+    let R=4; const prodAnnual=[];
+    pids.forEach((pid,pi)=>{ const p=data.products[pid]; const comps=(p.components||[]).filter(c=>c);
+      const od=data.opsData?.[pid]||{}; const clr=PRODCLR[pi%PRODCLR.length];
+      dcell(ws,R,1,p.name||'',{bg:clr,bold:true}); dcell(ws,R,2,'',{bg:clr}); for(let m=0;m<13;m++) dcell(ws,R,3+m,'',{bg:clr}); R++;
+      const cStart=R;
+      comps.forEach((comp,ci)=>{ const sbg=ci%2?STRIPE:undefined;
+        dcell(ws,R,1,comp+' (كلفة الوحدة)',{bg:sbg}); dcell(ws,R,2,'$',{bg:sbg});
+        for(let m=0;m<12;m++){ const col=3+m; dcell(ws,R,col,pm(od[`${ci}_${m}`])||0,{numFmt:MONEY,color:INPUT,bg:sbg}); }
+        dcell(ws,R,15,'',{bg:sbg}); R++; });
+      const cEnd=R-1;
+      if(comps.length){ dcell(ws,R,1,'إجمالي شهري (الكلفة × الكمية)',{bg:SUMLBL,bold:true}); dcell(ws,R,2,'',{bg:SUMLBL});
+        for(let m=0;m<12;m++){ const col=3+m,Lc=colL(col);
+          dcell(ws,R,col,{formula:`SUM(${Lc}${cStart}:${Lc}${cEnd})*${Q(SN.rev)}!${Lc}${revQtyRow[pid]}`},{numFmt:MONEY,bg:SUMLBL}); }
+        dcell(ws,R,15,{formula:`SUM(C${R}:N${R})`},{numFmt:MONEY,bg:SUMVAL,bold:true}); prodAnnual.push(`O${R}`); R++; } });
+    const tr=R; totalRow(ws,tr,1,14,'إجمالي التكاليف التشغيلية السنوية',15, prodAnnual.length?{formula:prodAnnual.join('+')}:0);
+    refs.opsAnnual=`${Q(SN.ops)}!$O$${tr}`; }
 
-// ذاكرة تخزين مؤقتة قصيرة لكل تبويب (بروفايل) لتقليل طلبات Google API
-const DEFAULT_TAB = (store.DEFAULT_PROFILE && store.DEFAULT_PROFILE.tab) || sheets.TAB;
-const caches = {}; // tab → { at, tasks }
-const CACHE_MS = Number(process.env.CACHE_MS || 8000);
+  // FIXED
+  { const ws=wsFixed; band(ws,7,'التكاليف الثابتة');
+    colHeaders(ws,3,['#','الصنف','البيان','ملاحظات','التكلفة الشهرية للواحدة ($)','العدد','التكلفة الشهرية الإجمالية ($)'],[6,16,24,22,20,9,22]);
+    const isSalary=r=>(r.cat==='رواتب')&&(String(r.bayan||'').includes('الموظفين')||String(r.notes||'').includes('تلقائي'));
+    const isMkt=r=>(r.cat==='تسويق')||(String(r.bayan||'').includes('التسويق')&&String(r.notes||'').includes('تلقائي'));
+    const rows=data.fixedRows||[];
+    rows.forEach((r,i)=>{ const R=4+i, auto=isSalary(r)||isMkt(r), sbg=auto?LIGHT:(i%2?STRIPE:undefined);
+      dcell(ws,R,1,i+1,{bg:sbg}); dcell(ws,R,2,r.cat||'',{bg:sbg}); dcell(ws,R,3,r.bayan||'',{bg:sbg}); dcell(ws,R,4,r.notes||'',{bg:sbg});
+      if(isSalary(r)){ dcell(ws,R,5,{formula:`${refs.hrAnnual}/12`},{numFmt:MONEY,color:LINK,bg:sbg}); dcell(ws,R,6,1,{bg:sbg}); }
+      else if(isMkt(r)){ dcell(ws,R,5,{formula:`${refs.mktMonthly}`},{numFmt:MONEY,color:LINK,bg:sbg}); dcell(ws,R,6,1,{bg:sbg}); }
+      else { dcell(ws,R,5,pm(r.price),{numFmt:MONEY,color:INPUT,bg:sbg}); dcell(ws,R,6,pm(r.qty),{color:INPUT,bg:sbg}); }
+      dcell(ws,R,7,{formula:`E${R}*F${R}`},{numFmt:MONEY,bg:sbg}); });
+    const tr=4+rows.length; totalRow(ws,tr,1,6,'الإجمالي الشهري',7,rows.length?{formula:`SUM(G4:G${tr-1})`}:0);
+    const ar=tr+1; totalRow(ws,ar,1,6,'الإجمالي السنوي',7,{formula:`G${tr}*12`});
+    refs.fixedMonthly=`${Q(SN.fixed)}!$G$${tr}`; refs.fixedAnnual=`${Q(SN.fixed)}!$G$${ar}`; }
 
-// التبويب النشط للطلب = البروفايل المختار في الجلسة (أو الافتراضي)
-function activeTab(req) { return (req && req.session && req.session.profile) || DEFAULT_TAB; }
+  // DEPRECIATION
+  { const ws=wsDep; band(ws,8,'الاهتلاك');
+    colHeaders(ws,3,['#','الصنف','البيان','نسبة الاهتلاك (%)','ملاحظات','قيمة الاهتلاك للواحدة ($)','العدد','قيمة الاهتلاك الإجمالية ($)'],[6,16,24,16,20,20,9,22]);
+    const rows=data.depRows||[];
+    rows.forEach((r,i)=>{ const R=4+i, sbg=i%2?STRIPE:undefined;
+      dcell(ws,R,1,i+1,{bg:sbg}); dcell(ws,R,2,r.cat||'',{bg:sbg}); dcell(ws,R,3,r.bayan||'',{bg:sbg});
+      dcell(ws,R,4,pm(r.pct)/100,{numFmt:PCT,color:INPUT,bg:sbg}); dcell(ws,R,5,r.notes||'',{bg:sbg});
+      const base=pm(r.perUnit)&&pm(r.pct)?pm(r.perUnit)/(pm(r.pct)/100):pm(r.price);
+      dcell(ws,R,6,{formula:`(${base||0})*D${R}`},{numFmt:MONEY,bg:sbg}); dcell(ws,R,7,pm(r.qty),{color:INPUT,bg:sbg});
+      dcell(ws,R,8,{formula:`F${R}*G${R}`},{numFmt:MONEY,bg:sbg}); });
+    const tr=4+rows.length; totalRow(ws,tr,1,7,'إجمالي قيمة الاهتلاك',8,rows.length?{formula:`SUM(H4:H${tr-1})`}:0);
+    refs.depTotal=`${Q(SN.dep)}!$H$${tr}`; }
 
-async function loadTasks(tab, force = false) {
-  const t = tab || DEFAULT_TAB;
-  const now = Date.now();
-  const c = caches[t];
-  if (!force && c && now - c.at < CACHE_MS && c.tasks.length) return c.tasks;
-  const tasks = await sheets.getTasks(t);
-  caches[t] = { at: now, tasks };
-  return tasks;
-}
+  // FINANCIAL SUMMARY
+  { const ws=wsSum; ws.columns=[{width:34},{width:24},{width:30},{width:3},{width:10},{width:10},{width:8},{width:8}];
+    band(ws,3,'الخلاصة المالية السنوية','ملخّص ديناميكي — يتحدّث تلقائياً عند تعديل أي مُدخل');
+    let R=3;
+    const kv=(label,formula,o)=>{ o=o||{}; const numFmt=o.numFmt||MONEY0, color=o.color||LINK, big=o.big;
+      const l=ws.getCell(R,1); l.value=label; l.font={bold:true,name:F,size:big?13:12,color:{argb:NAVY}}; l.fill=fill(SUMLBL); l.alignment={horizontal:'center',vertical:'middle',readingOrder:2,wrapText:true}; l.border=thin();
+      ws.mergeCells(R,2,R,3); const v=ws.getCell(R,2); v.value=formula; if(numFmt)v.numFmt=numFmt;
+      v.font={bold:true,name:F,size:big?18:13,color:{argb:big?ORANGE:color}}; v.fill=fill(big?NAVY:SUMVAL);
+      v.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; v.border=thin(); ws.getRow(R).height=big?32:24;
+      const rr=R; R++; return rr; };
+    kv('الإيرادات السنوية المتوقعة',{formula:`=${refs.revAnnual}`});
+    kv('إجمالي التكاليف التشغيلية السنوية',{formula:`=${refs.opsAnnual}`});
+    kv('التكاليف الثابتة السنوية',{formula:`=${refs.fixedAnnual}`});
+    kv('إجمالي التكاليف التأسيسية',{formula:`=${refs.founding}`});
+    kv('الاهتلاك السنوي',{formula:`=${refs.depTotal}`});
+    kv('عدد الموظفين في المشروع', Number(data.summary?.employees||0), {numFmt:'0', color:FORMULA});
+    const rev=refs.revAnnual, ops=refs.opsAnnual, fix=refs.fixedAnnual, fnd=refs.founding, dep=refs.depTotal;
+    const netRow=kv('صافي الربح السنوي',{formula:`${rev}-${ops}-${fix}-${dep}`},{numFmt:MONEY0,big:true});
+    const netRef=`B${netRow}`;
+    const payRow=R;
+    const l=ws.getCell(payRow,1); l.value='فترة استرداد رأس المال'; l.font={bold:true,name:F,size:12,color:{argb:NAVY}}; l.fill=fill(SUMLBL); l.alignment={horizontal:'center',vertical:'middle',readingOrder:2,wrapText:true}; l.border=thin();
+    ws.getCell(payRow,5).value={formula:`IF(${netRef}>0,${fnd}/${netRef},-1)`};
+    ws.getCell(payRow,6).value={formula:`IF(E${payRow}>0,CEILING(E${payRow}*12,1),0)`};
+    ws.getCell(payRow,7).value={formula:`INT(F${payRow}/12)`};
+    ws.getCell(payRow,8).value={formula:`MOD(F${payRow},12)`};
+    const y=`G${payRow}`, mo=`H${payRow}`;
+    const yw=`IF(${y}=0,"",${y}&IF(${y}=1," سنة",IF(${y}<=10," سنوات"," سنة")))`;
+    const mw=`IF(${mo}=0,"",${mo}&IF(${mo}=1," شهر",IF(${mo}<=10," أشهر"," شهر")))`;
+    const phrase=`IF(E${payRow}<=0,"—",IF(AND(${y}=0,${mo}=0),"أقل من شهر",TRIM(${yw}&IF(AND(${y}>0,${mo}>0)," و ","")&${mw})))`;
+    ws.mergeCells(payRow,2,payRow,3); const pv=ws.getCell(payRow,2); pv.value={formula:phrase};
+    pv.font={bold:true,name:F,size:13,color:{argb:FORMULA}}; pv.fill=fill(SUMVAL); pv.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; pv.border=thin(); ws.getRow(payRow).height=24; R++;
+    [5,6,7,8].forEach(c=>ws.getColumn(c).hidden=true);
+    const kvPct=(label,formula)=>{
+      const l=ws.getCell(R,1); l.value=label; l.font={bold:true,name:F,size:12,color:{argb:NAVY}}; l.fill=fill(SUMLBL); l.alignment={horizontal:'center',vertical:'middle',readingOrder:2,wrapText:true}; l.border=thin();
+      const v=ws.getCell(R,2); v.value=formula; v.numFmt=PCT; v.font={bold:true,name:F,size:13,color:{argb:FORMULA}}; v.fill=fill(SUMVAL); v.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; v.border=thin();
+      const g=ws.getCell(R,3); g.value=formula; g.numFmt=PCT; g.font={name:F,size:11,color:{argb:FORMULA}}; g.fill=fill(SUMVAL); g.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; g.border=thin();
+      try{ ws.addConditionalFormatting({ref:`C${R}`,rules:[{type:'iconSet',iconSet:'5Quarters',reverse:false,showValue:false,cfvo:[{type:'num',value:0},{type:'num',value:0.2},{type:'num',value:0.4},{type:'num',value:0.6},{type:'num',value:0.8}]}]}); }catch(e){}
+      ws.getRow(R).height=24; const rr=R; R++; return rr; };
+    const marRow=kvPct('هامش الربح الصافي',{formula:`IF(${rev}>0,${netRef}/${rev},0)`});
+    const roiRow=kvPct('العائد على الاستثمار',{formula:`IF(${fnd}>0,${netRef}/${fnd},0)`});
+    R++;
+    ws.mergeCells(R,1,R,3); const bh=ws.getCell(R,1); bh.value='مقارنة الإيرادات والتكاليف والربح'; bh.font={bold:true,color:{argb:WHITE},name:F,size:13}; bh.fill=fill(NAVY); bh.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; ws.getRow(R).height=26; R++;
+    const barStart=R;
+    const barRows=[['الإيرادات',`${rev}`,BLUE],['التكاليف (تشغيلية+ثابتة+اهتلاك)',`${ops}+${fix}+${dep}`,GRAYc],['صافي الربح',`${netRef}`,GREENc]];
+    barRows.forEach(([lab,fm,clr])=>{ const l2=ws.getCell(R,1); l2.value=lab; l2.font={bold:true,name:F,size:12,color:{argb:NAVY}}; l2.alignment={horizontal:'center',vertical:'middle',readingOrder:2,wrapText:true}; l2.border=thin();
+      ws.mergeCells(R,2,R,3); const v=ws.getCell(R,2); v.value={formula:fm}; v.numFmt=MONEY0; v.font={name:F,size:12,bold:true,color:{argb:NAVY}}; v.alignment={horizontal:'center',vertical:'middle',readingOrder:2}; v.border=thin(); ws.getRow(R).height=26;
+      try{ ws.addConditionalFormatting({ref:`B${R}`,rules:[{type:'dataBar',gradient:false,border:false,showValue:true,color:{argb:clr},cfvo:[{type:'num',value:0},{type:'formula',value:`$B$${barStart}`}]}]}); }catch(e){}
+      R++; });
+    R++; ws.mergeCells(R,1,R,3); const note=ws.getCell(R,1);
+    note.value='الخلايا الزرقاء مُدخلات قابلة للتعديل · الخضراء روابط بين الأوراق · السوداء معادلات محسوبة';
+    note.font={italic:true,name:F,size:10,color:{argb:'FF808080'}}; note.alignment={horizontal:'center',vertical:'middle',readingOrder:2,wrapText:true}; }
 
-function invalidateCache(tab) { if (tab) delete caches[tab]; else Object.keys(caches).forEach((k) => delete caches[k]); }
+  // APPLICANT
+  { const ws=wsApp; ws.columns=[{width:30},{width:48}]; band(ws,2,'معلومات مقدّم المشروع');
+    let R=3;
+    const lv=(label,val)=>{ const l=ws.getCell(R,1); l.value=label; l.font={bold:true,name:F,size:12,color:{argb:NAVY}}; l.fill=fill(SUMLBL); l.alignment={horizontal:'center',vertical:'middle',readingOrder:2,wrapText:true}; l.border=thin();
+      const v=ws.getCell(R,2); v.value=val||''; v.font={name:F,size:12,color:{argb:FORMULA}}; v.fill=fill(SUMVAL); v.alignment={horizontal:'center',vertical:'middle',readingOrder:2,wrapText:true}; v.border=thin(); ws.getRow(R).height=24; R++; };
+    lv('اسم مقدم المشروع',data.applicantName); lv('رقم الهاتف',data.applicantPhone); lv('تاريخ الميلاد',data.applicantBirth);
+    lv('مكان الإقامة',data.applicantResidence); lv('العمل الحالي',data.applicantJob); lv('عدد سنوات الخبرة',data.applicantExpYears);
+    lv('الخبرة المرتبطة بالمشروع',data.applicantExperience); }
 
-// قائمة البروفايلات المتاحة لمستخدم (فارغ = الكل)
-async function availableProfilesFor(user) {
-  const all = store.enabled ? await store.getProfiles() : [store.DEFAULT_PROFILE];
-  if (!user || !user.profiles || !user.profiles.length) return all;
-  const set = new Set(user.profiles);
-  const filtered = all.filter((p) => set.has(p.tab));
-  return filtered.length ? filtered : all;
-}
+  { const ws=wsProj; ws.columns=[{width:30},{width:48}]; band(ws,2,'معلومات المشروع');
+    let R=3;
+    const lv=(label,val)=>{ const l=ws.getCell(R,1); l.value=label; l.font={bold:true,name:F,size:12,color:{argb:NAVY}}; l.fill=fill(SUMLBL); l.alignment={horizontal:'center',vertical:'middle',readingOrder:2,wrapText:true}; l.border=thin();
+      const v=ws.getCell(R,2); v.value=val||''; v.font={name:F,size:12,color:{argb:FORMULA}}; v.fill=fill(SUMVAL); v.alignment={horizontal:'center',vertical:'middle',readingOrder:2,wrapText:true}; v.border=thin(); ws.getRow(R).height=24; R++; };
+    lv('عنوان المشروع',data.projectTitle); lv('فكرة المشروع',data.projectIdea); lv('الشرائح المستهدفة',data.targetSegments);
+    lv('نوع المكان المقترح',data.placeType); lv('وضع المكان',data.placeStatus); lv('عنوان / موقع المشروع',data.projectAddress); }
 
-// حارس الكتابة: يمنع التعديل عند غياب صلاحية الكتابة (مفتاح قراءة فقط)
-function requireWrite(req, res, next) {
-  if (!sheets.canWrite) {
-    return res.status(403).json({ ok: false, error: 'الكتابة معطّلة — لم يُضبط حساب الخدمة (Service Account).' });
-  }
-  next();
-}
+  [wsFound,wsHR,wsRev,wsOps,wsFixed,wsDep].forEach(ws=>{ ws.views=[{rightToLeft:true,state:'frozen',ySplit:3}]; });
 
-function uniqueSorted(values) {
-  return [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ar'));
-}
-
-// ===== تخصيص المخرجات لمستخدمين =====
-// مكلّفو المخرجات كتل متوازية لكتل «المخرج المطلوب»؛ «-» (أو «—») = بلا تخصيص.
-function splitOwnerNames(raw) {
-  return String(raw || '').split(/[\n,،/]+/).map((s) => s.trim()).filter(Boolean);
-}
-function alignAssignees(raw, n) {
-  const a = sheets.fuBlocks(raw || '');
-  while (a.length < n) a.push('-');
-  return a.slice(0, n);
-}
-function dvAssigneeName(v) {
-  const s = String(v == null ? '' : v).trim();
-  return (s && s !== '-' && s !== '—' && s !== '----------') ? s : '';
-}
-// هل يحقّ للمستخدم الحالي التصرّف بمخرَج مخصَّص؟ المدير دائماً؛ غير المخصَّص متاح للمحرّر؛ وإلا المخصَّص فقط.
-function canActOnDeliv(req, assigneeName) {
-  if (!auth.authEnabled()) return true;
-  const u = req.session && req.session.user;
-  if (auth.hasRole(u, 'admin')) return true;
-  if (!assigneeName) return true;
-  return String((u && u.name) || '').trim() === String(assigneeName).trim();
-}
-
-// تنبيه تيليجرام لمن عُيّن مسؤولاً عن مهمة من قِبل مستخدم آخر (يُتجاهَل من ليس له تيليجرام مربوط)
-async function notifyOwnersAssigned(req, info, addedNames) {
-  try {
-    if (!telegram.enabled || !store.enabled) return;
-    const actor = authorName(req.session && req.session.user);
-    const added = (addedNames || []).map((s) => String(s).trim()).filter(Boolean).filter((n) => n !== actor);
-    if (!added.length) return;
-    const users = (await store.getUsersFull()) || [];
-    const appUrl = process.env.APP_URL || '';
-    const title = esc(`${info.project || 'مهمة'}${info.file ? ' — ' + info.file : ''}`);
-    for (const name of added) {
-      const u = users.find((x) => String(x.name || '').trim() === name && x.telegramChatId);
-      if (!u) continue;
-      const line = `📌 تم تعيينك مسؤولاً عن مهمة: <b>${title}</b> من قِبل ${esc(actor)}${info.deadlineRaw ? `\nالموعد: ${esc(info.deadlineRaw)}` : ''}`;
-      telegram.sendMessage(u.telegramChatId, `${line}${appUrl ? '\n' + appUrl : ''}`).catch(() => { /* تجاهل */ });
-    }
-  } catch (e) { console.warn('notifyOwnersAssigned', e.message); }
-}
-
-function summarize(tasks) {
-  const s = {
-    total: tasks.length,
-    today: 0,
-    overdue: 0,
-    soon3: 0,
-    thisWeek: 0,
-    undated: 0,
-    recurring: 0,
-    done: 0,
-    byPriority: {},
-    byStatus: {},
-    byType: {},
-    meetings: { total: 0, required: 0, scheduled: 0, done: 0 },
-  };
-  let completionSum = 0;
-  for (const t of tasks) {
-    if (t.isToday) s.today++;
-    if (t.isOverdue) s.overdue++;
-    if (t.isSoon3) s.soon3++;
-    if (t.isThisWeek) s.thisWeek++;
-    if (t.isUndated) s.undated++;
-    if (t.isRecurring) s.recurring++;
-    if (t.isDone) s.done++;
-    s.byPriority[t.priority] = (s.byPriority[t.priority] || 0) + 1;
-    s.byStatus[t.status] = (s.byStatus[t.status] || 0) + 1;
-    const tk = t.type || '';
-    s.byType[tk] = (s.byType[tk] || 0) + 1;
-    // عدّ الاجتماعات حسب الحالة (مطلوب/مجدول/تم) — المهمة قد تحوي عدّة اجتماعات
-    for (const m of (t.meetings || [])) {
-      s.meetings.total++;
-      if (m.status === 'done') s.meetings.done++;
-      else if (m.status === 'scheduled') s.meetings.scheduled++;
-      else s.meetings.required++;
-    }
-    completionSum += taskCompletion(t);
-  }
-  // نسبة الإنجاز تشمل الإنجاز الجزئي للمخرجات (مهمة بنصف مخرجاتها منجزة = 0.5)
-  s.completion = s.total ? Math.round((completionSum / s.total) * 100) : 0;
-  return s;
-}
-
-// نسبة إنجاز المهمة الواحدة (0..1): منجزة كلياً=1، وإلا نسبة المخرجات المؤشَّرة، وبلا مخرجات=0
-function taskCompletion(t) {
-  if (t.isDone) return 1;
-  const dB = sheets.fuBlocks(t.deliverable || '');
-  if (!dB.length) return 0;
-  const done = dB.filter((b) => /^✓/.test(b)).length;
-  return done / dB.length;
-}
-
-// كل المهام + ملخص + خيارات الفلاتر
-app.get('/api/tasks', requireAuth, async (req, res) => {
-  try {
-    const tasks = await loadTasks(activeTab(req), req.query.refresh === '1');
-    res.json({
-      ok: true,
-      tasks,
-      summary: summarize(tasks),
-      filters: {
-        projects: uniqueSorted(tasks.map((t) => t.project)),
-        owners: uniqueSorted(tasks.flatMap((t) => t.owners)),
-        priorities: uniqueSorted(tasks.map((t) => t.priority)),
-        statuses: sheets.STATUSES,
-        files: uniqueSorted(tasks.map((t) => t.file)),
-        types: uniqueSorted(tasks.map((t) => t.type)),
-        linked: uniqueSorted(tasks.flatMap((t) => t.linkedList || [])),
-      },
-      meta: { canWrite: sheets.canWrite, fetchedAt: new Date().toISOString() },
+  // ── تمريرة نهائية: تكبير جميع الخطوط درجتين وجعلها عريضة + توسيع الصفوف ──
+  wb.eachSheet(ws=>{
+    ws.properties.defaultRowHeight=21;
+    ws.eachRow({includeEmpty:false},row=>{
+      if(row.height) row.height=Math.round(row.height*1.2);
+      row.eachCell({includeEmpty:false},cell=>{
+        const f=cell.font||{};
+        cell.font={...f,name:F,size:(f.size||11)+2,bold:true};
+      });
     });
-  } catch (err) {
-    console.error('GET /api/tasks', err.message);
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-// تعديل مهمة قائمة (حقول متعددة)
-app.patch('/api/tasks/:row', requireAuth, requireRole('editor'), requireWrite, async (req, res) => {
-  try {
-    // المسؤولون قبل التعديل (لاكتشاف المُضافين حديثاً وتنبيههم)
-    let oldOwners = [];
-    if (req.body && 'owner' in req.body) {
-      try { const before = (await loadTasks(activeTab(req))).find((x) => String(x.row) === String(req.params.row)); oldOwners = (before && before.owners) || []; } catch { /* تجاهل */ }
-    }
-    const task = await sheets.updateTask(activeTab(req), req.params.row, req.body || {});
-    invalidateCache(activeTab(req));
-    res.json({ ok: true, task });
-    // تنبيه المسؤولين المُضافين حديثاً عبر تيليجرام (بعد الردّ، لا يعطّل الاستجابة)
-    if (req.body && 'owner' in req.body) {
-      const oldSet = oldOwners.map((o) => o.trim());
-      const added = (task.owners || []).filter((n) => !oldSet.includes(n.trim()));
-      if (added.length) notifyOwnersAssigned(req, task, added);
-    }
-  } catch (err) {
-    console.error('PATCH /api/tasks', err.message);
-    res.status(400).json({ ok: false, error: err.message });
-  }
-});
-
-// تغيير حالة مهمة (للوحة كانبان)
-app.post('/api/tasks/:row/status', requireAuth, requireRole('editor'), requireWrite, async (req, res) => {
-  try {
-    const { status } = req.body || {};
-    if (!sheets.STATUSES.includes(status)) {
-      return res.status(400).json({ ok: false, error: 'حالة غير صالحة' });
-    }
-    const task = await sheets.updateTask(activeTab(req), req.params.row, { status });
-    invalidateCache(activeTab(req));
-    res.json({ ok: true, task });
-  } catch (err) {
-    res.status(400).json({ ok: false, error: err.message });
-  }
-});
-
-// إضافة حدث إلى سجل «نتائج المتابعة اليومية» (يُلحق سطراً مؤرّخاً باسم المستخدم)
-app.post('/api/tasks/:row/followup', requireAuth, requireRole('editor'), requireWrite, async (req, res) => {
-  try {
-    const text = String((req.body && req.body.text) || '').replace(/\r/g, '').replace(/\n[ \t]*\n+/g, '\n').trim(); // نحفظ أسطر الحدث، ونمنع السطر الفارغ داخله
-    if (!text) return res.status(400).json({ ok: false, error: 'نصّ الحدث فارغ' });
-    const tasks = await loadTasks(activeTab(req), true);
-    const t = tasks.find((x) => String(x.row) === String(req.params.row));
-    const u = req.session && req.session.user;
-    const author = authorName(u);
-    const logLine = `[${nowStamp()} — ${author}]`;
-    // الكتل متوازية: نصّ الحدث في «المتابعة» والسجل في «السجل»، والأحداث اليدوية تأخذ «----------»
-    const fB = sheets.fuBlocks(t ? t.followup : '');
-    const lB = sheets.fuBlocks(t ? t.log : '');
-    while (lB.length < fB.length) lB.push('----------');
-    fB.push(text);
-    lB.push(logLine);
-    const task = await sheets.updateTask(activeTab(req), req.params.row, { followup: fB.join('\n\n'), log: lB.join('\n\n') });
-    invalidateCache(activeTab(req));
-    res.json({ ok: true, task });
-  } catch (err) {
-    console.error('POST followup', err.message);
-    res.status(400).json({ ok: false, error: err.message });
-  }
-});
-
-// تعديل حدث متابعة بالموضع: النصّ والتاريخ/الوقت (مدير/محرّر) · اسم المستخدم في السجل (المدير فقط) — المشاهد ممنوع
-app.patch('/api/tasks/:row/followup/:idx', requireAuth, requireRole('editor'), requireWrite, async (req, res) => {
-  try {
-    const idx = Number(req.params.idx);
-    const tasks = await loadTasks(activeTab(req), true);
-    const t = tasks.find((x) => String(x.row) === String(req.params.row));
-    const fB = sheets.fuBlocks(t ? t.followup : '');
-    const lB = sheets.fuBlocks(t ? t.log : '');
-    while (lB.length < fB.length) lB.push('----------');
-    if (!Number.isInteger(idx) || idx < 0 || idx >= fB.length) return res.status(400).json({ ok: false, error: 'حدث غير موجود' });
-
-    const u = req.session && req.session.user;
-    const role = !auth.authEnabled() ? 'admin' : ((u && u.role) || 'viewer');
-    const isAdmin = role === 'admin';
-    const canText = isAdmin || role === 'editor';
-
-    // النصّ: يعدّله المدير/المحرّر فقط؛ المشاهد يُبقيه كما هو
-    if (canText) {
-      const text = String((req.body && req.body.text) || '').replace(/\r/g, '').replace(/\n[ \t]*\n+/g, '\n').trim();
-      if (!text) return res.status(400).json({ ok: false, error: 'نصّ الحدث فارغ' });
-      fB[idx] = text;
-    }
-    // السجل: نقرأ القيم الأصلية لنحافظ على اسم المستخدم عند غير المدير
-    const m = String(lB[idx] || '').match(/^\s*\[(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})\s*[—–-]\s*(.+?)\]\s*$/);
-    const origAuthor = m ? m[3].trim() : authorName(u);
-    const { date, time, author: customAuthor } = req.body || {};
-    const stamp = nowStamp();
-    const dt = (date && /^\d{4}-\d{2}-\d{2}$/.test(String(date))) ? date : (m ? m[1] : stamp.slice(0, 10));
-    const tm = /^\d{1,2}:\d{2}$/.test(String(time || '')) ? time : (m ? m[2] : stamp.slice(11));
-    // اسم المستخدم في السجل: المدير فقط يعدّله؛ غيره يُبقي الاسم الأصلي
-    const au = isAdmin ? (String(customAuthor || '').trim() || origAuthor) : origAuthor;
-    lB[idx] = `[${dt} ${tm} — ${au}]`;
-
-    const task = await sheets.updateTask(activeTab(req), req.params.row, { followup: fB.join('\n\n'), log: lB.join('\n\n') });
-    invalidateCache(activeTab(req));
-    res.json({ ok: true, task });
-  } catch (err) { console.error('PATCH followup', err.message); res.status(400).json({ ok: false, error: err.message }); }
-});
-
-// حذف حدث متابعة بالموضع — يحذف نصّه وسجلّه معاً
-app.delete('/api/tasks/:row/followup/:idx', requireAuth, requireRole('editor'), requireWrite, async (req, res) => {
-  try {
-    const idx = Number(req.params.idx);
-    const tasks = await loadTasks(activeTab(req), true);
-    const t = tasks.find((x) => String(x.row) === String(req.params.row));
-    const fB = sheets.fuBlocks(t ? t.followup : '');
-    const lB = sheets.fuBlocks(t ? t.log : '');
-    while (lB.length < fB.length) lB.push('----------');
-    if (!Number.isInteger(idx) || idx < 0 || idx >= fB.length) return res.status(400).json({ ok: false, error: 'حدث غير موجود' });
-    fB.splice(idx, 1);
-    lB.splice(idx, 1);
-    const task = await sheets.updateTask(activeTab(req), req.params.row, { followup: fB.join('\n\n'), log: lB.join('\n\n') });
-    invalidateCache(activeTab(req));
-    res.json({ ok: true, task });
-  } catch (err) { console.error('DELETE followup', err.message); res.status(400).json({ ok: false, error: err.message }); }
-});
-
-// ===== المخرجات المطلوبة ككائنات (كتل مفصولة بسطر فارغ في نفس الخلية) =====
-app.post('/api/tasks/:row/deliverable', requireAuth, requireRole('editor'), requireWrite, async (req, res) => {
-  try {
-    const text = String((req.body && req.body.text) || '').trim().replace(/\n\s*\n+/g, '\n');
-    if (!text) return res.status(400).json({ ok: false, error: 'نصّ المخرج فارغ' });
-    const tasks = await loadTasks(activeTab(req), true);
-    const t = tasks.find((x) => String(x.row) === String(req.params.row));
-    const dB = sheets.fuBlocks(t ? t.deliverable : '');
-    const aB = alignAssignees(t ? t.assignees : '', dB.length);
-    dB.push(text); aB.push('-'); // المخرج الجديد بلا تخصيص افتراضاً
-    const task = await sheets.updateTask(activeTab(req), req.params.row, { deliverable: dB.join('\n\n'), dvowners: aB.join('\n\n') });
-    invalidateCache(activeTab(req));
-    res.json({ ok: true, task });
-  } catch (err) { console.error('POST deliverable', err.message); res.status(400).json({ ok: false, error: err.message }); }
-});
-app.patch('/api/tasks/:row/deliverable/:idx', requireAuth, requireRole('editor'), requireWrite, async (req, res) => {
-  try {
-    const text = String((req.body && req.body.text) || '').trim().replace(/\n\s*\n+/g, '\n');
-    if (!text) return res.status(400).json({ ok: false, error: 'نصّ المخرج فارغ' });
-    const idx = Number(req.params.idx);
-    const tasks = await loadTasks(activeTab(req), true);
-    const t = tasks.find((x) => String(x.row) === String(req.params.row));
-    const dB = sheets.fuBlocks(t ? t.deliverable : '');
-    if (!Number.isInteger(idx) || idx < 0 || idx >= dB.length) return res.status(400).json({ ok: false, error: 'مخرج غير موجود' });
-    const aB = alignAssignees(t ? t.assignees : '', dB.length);
-    if (!canActOnDeliv(req, dvAssigneeName(aB[idx]))) return res.status(403).json({ ok: false, error: 'هذا المخرج مخصَّص لمستخدم آخر' });
-    dB[idx] = text;
-    const task = await sheets.updateTask(activeTab(req), req.params.row, { deliverable: dB.join('\n\n'), dvowners: aB.join('\n\n') });
-    invalidateCache(activeTab(req));
-    res.json({ ok: true, task });
-  } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
-});
-app.delete('/api/tasks/:row/deliverable/:idx', requireAuth, requireRole('editor'), requireWrite, async (req, res) => {
-  try {
-    const idx = Number(req.params.idx);
-    const tasks = await loadTasks(activeTab(req), true);
-    const t = tasks.find((x) => String(x.row) === String(req.params.row));
-    const dB = sheets.fuBlocks(t ? t.deliverable : '');
-    if (!Number.isInteger(idx) || idx < 0 || idx >= dB.length) return res.status(400).json({ ok: false, error: 'مخرج غير موجود' });
-    const aB = alignAssignees(t ? t.assignees : '', dB.length);
-    if (!canActOnDeliv(req, dvAssigneeName(aB[idx]))) return res.status(403).json({ ok: false, error: 'هذا المخرج مخصَّص لمستخدم آخر' });
-    dB.splice(idx, 1); aB.splice(idx, 1);
-    const task = await sheets.updateTask(activeTab(req), req.params.row, { deliverable: dB.join('\n\n'), dvowners: aB.join('\n\n') });
-    invalidateCache(activeTab(req));
-    res.json({ ok: true, task });
-  } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
-});
-
-// تأشير/إلغاء تأشير مخرج كمنجَز (بإضافة/إزالة «✓»)؛ عند إنجاز كل المخرجات تصبح المهمة «منجزة»
-app.post('/api/tasks/:row/deliverable/:idx/toggle', requireAuth, requireRole('editor'), requireWrite, async (req, res) => {
-  try {
-    const idx = Number(req.params.idx);
-    const tasks = await loadTasks(activeTab(req), true);
-    const t = tasks.find((x) => String(x.row) === String(req.params.row));
-    const dB = sheets.fuBlocks(t ? t.deliverable : '');
-    if (!Number.isInteger(idx) || idx < 0 || idx >= dB.length) return res.status(400).json({ ok: false, error: 'مخرج غير موجود' });
-    const aB = alignAssignees(t ? t.assignees : '', dB.length);
-    if (!canActOnDeliv(req, dvAssigneeName(aB[idx]))) return res.status(403).json({ ok: false, error: 'هذا المخرج مخصَّص لمستخدم آخر' });
-    const done = /^✓/.test(dB[idx]);
-    dB[idx] = done ? dB[idx].replace(/^✓\s*/, '') : '✓ ' + dB[idx];
-    const patch = { deliverable: dB.join('\n\n'), dvowners: aB.join('\n\n') };
-    if (dB.length && dB.every((b) => /^✓/.test(b))) patch.status = sheets.DONE_STATUS;
-    const task = await sheets.updateTask(activeTab(req), req.params.row, patch);
-    invalidateCache(activeTab(req));
-    res.json({ ok: true, task });
-  } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
-});
-
-// تخصيص مخرَج لمستخدم (أو إزالة التخصيص بإرسال قيمة فارغة) — للمحرّر/المدير
-app.post('/api/tasks/:row/deliverable/:idx/assignee', requireAuth, requireRole('editor'), requireWrite, async (req, res) => {
-  try {
-    const idx = Number(req.params.idx);
-    const assignee = String((req.body && req.body.assignee) || '').trim();
-    const tasks = await loadTasks(activeTab(req), true);
-    const t = tasks.find((x) => String(x.row) === String(req.params.row));
-    const dB = sheets.fuBlocks(t ? t.deliverable : '');
-    if (!Number.isInteger(idx) || idx < 0 || idx >= dB.length) return res.status(400).json({ ok: false, error: 'مخرج غير موجود' });
-    const aB = alignAssignees(t ? t.assignees : '', dB.length);
-    // إعادة التخصيص محصورة بالمخصَّص الحالي أو المدير (غير المخصَّص متاح لأي محرّر)
-    if (!canActOnDeliv(req, dvAssigneeName(aB[idx]))) return res.status(403).json({ ok: false, error: 'هذا المخرج مخصَّص لمستخدم آخر' });
-    aB[idx] = assignee || '-';
-    const task = await sheets.updateTask(activeTab(req), req.params.row, { dvowners: aB.join('\n\n') });
-    invalidateCache(activeTab(req));
-    res.json({ ok: true, task });
-  } catch (err) { console.error('POST deliverable assignee', err.message); res.status(400).json({ ok: false, error: err.message }); }
-});
-
-// حذف مهمة (يحذف صفّها من الشيت)
-app.delete('/api/tasks/:row', requireAuth, requireRole('editor'), requireWrite, async (req, res) => {
-  try {
-    await sheets.deleteTask(activeTab(req), req.params.row);
-    invalidateCache(activeTab(req));
-    res.json({ ok: true });
-  } catch (err) { console.error('DELETE /api/tasks', err.message); res.status(400).json({ ok: false, error: err.message }); }
-});
-
-// ===== المرفقات (رفع إلى Google Drive وحفظ الرابط في عمود «مرفقات») =====
-app.post('/api/tasks/:row/attachment', requireAuth, requireRole('editor'), requireWrite, async (req, res) => {
-  try {
-    if (!drive.enabled) return res.status(400).json({ ok: false, error: 'المرفقات غير مفعّلة (إعداد Google Drive مطلوب).' });
-    const { name, mime, data } = req.body || {};
-    if (!data) return res.status(400).json({ ok: false, error: 'لا يوجد ملف' });
-    const buffer = Buffer.from(String(data), 'base64');
-    if (!buffer.length) return res.status(400).json({ ok: false, error: 'ملف فارغ' });
-    if (buffer.length > 8 * 1024 * 1024) return res.status(400).json({ ok: false, error: 'حجم الملف يتجاوز ٨ ميغابايت' });
-    const tasks = await loadTasks(activeTab(req), true);
-    const t = tasks.find((x) => String(x.row) === String(req.params.row));
-    const folderName = `${(t && t.project) || 'مشروع'} - ${(t && t.file) || 'ملف'}`.trim();
-    const up = await drive.uploadFile({ folderName, filename: String(name || 'ملف'), mimeType: mime, buffer });
-    const blocks = sheets.fuBlocks(t ? t.attachments : '');
-    blocks.push(`${up.name}\n${up.url}`);
-    const task = await sheets.updateTask(activeTab(req), req.params.row, { attachments: blocks.join('\n\n') });
-    invalidateCache(activeTab(req));
-    res.json({ ok: true, task });
-  } catch (err) { console.error('POST attachment', err.message); res.status(400).json({ ok: false, error: err.message }); }
-});
-
-app.delete('/api/tasks/:row/attachment/:idx', requireAuth, requireRole('editor'), requireWrite, async (req, res) => {
-  try {
-    const idx = Number(req.params.idx);
-    const tasks = await loadTasks(activeTab(req), true);
-    const t = tasks.find((x) => String(x.row) === String(req.params.row));
-    const blocks = sheets.fuBlocks(t ? t.attachments : '');
-    if (!Number.isInteger(idx) || idx < 0 || idx >= blocks.length) return res.status(400).json({ ok: false, error: 'مرفق غير موجود' });
-    const url = (blocks[idx].split('\n')[1] || '').trim();
-    drive.deleteFile(url).catch(() => { /* تجاهل */ });
-    blocks.splice(idx, 1);
-    const task = await sheets.updateTask(activeTab(req), req.params.row, { attachments: blocks.join('\n\n') });
-    invalidateCache(activeTab(req));
-    res.json({ ok: true, task });
-  } catch (err) { console.error('DELETE attachment', err.message); res.status(400).json({ ok: false, error: err.message }); }
-});
-
-// إضافة مهمة جديدة (مع أحداث متابعة اختيارية)
-app.post('/api/tasks', requireAuth, requireRole('editor'), requireWrite, async (req, res) => {
-  try {
-    const body = { ...(req.body || {}) };
-    const events = Array.isArray(body.events) ? body.events.map((e) => String(e).replace(/\r/g, '').replace(/\n[ \t]*\n+/g, '\n').trim()).filter(Boolean) : [];
-    delete body.events;
-    if (events.length) {
-      const u = req.session && req.session.user;
-      const author = authorName(u);
-      const stamp = nowStamp();
-      body.followup = events.join('\n\n');
-      body.log = events.map(() => `[${stamp} — ${author}]`).join('\n\n');
-    }
-    await sheets.addTask(activeTab(req), body);
-    invalidateCache(activeTab(req));
-    res.json({ ok: true });
-    // تنبيه المسؤولين المعيَّنين عند الإنشاء عبر تيليجرام (عدا من أنشأ المهمة)
-    const owners = splitOwnerNames(body.owner);
-    if (owners.length) notifyOwnersAssigned(req, { project: body.project, file: body.file, deadlineRaw: body.deadlineRaw }, owners);
-  } catch (err) {
-    console.error('POST /api/tasks', err.message);
-    res.status(400).json({ ok: false, error: err.message });
-  }
-});
-
-// ===== الإشعارات =====
-app.get('/api/push/key', requireAuth, (req, res) => {
-  res.json({ ok: true, key: process.env.VAPID_PUBLIC_KEY || null });
-});
-
-app.post('/api/push/subscribe', requireAuth, async (req, res) => {
-  notify.addSubscription(req.body);
-  try { if (store.enabled && req.session.user) await store.savePush(req.session.user.email, req.body); } catch (e) { console.warn('savePush', e.message); }
-  res.json({ ok: true });
-});
-
-// ===== التذكيرات (لكل مستخدم/مهمة) =====
-app.get('/api/reminders', requireAuth, async (req, res) => {
-  try {
-    let email = req.session?.user?.email;
-    // المدير يستطيع جلب تذكيرات مستخدم آخر عبر ?user=
-    if (req.query.user && auth.hasRole(req.session.user, 'admin')) email = String(req.query.user).toLowerCase();
-    if (!store.enabled || !email) return res.json({ ok: true, reminders: {}, storeEnabled: store.enabled });
-    res.json({ ok: true, reminders: await store.getReminders(email), methods: REMINDER_METHODS, offsets: REMINDER_OFFSETS });
-  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
-});
-
-// تطبيع مصفوفة التوقيتات [{t,count,every}]
-function sanitizeTimes(arr) {
-  return (Array.isArray(arr) ? arr : [])
-    .map((x) => ({ t: /^\d{1,2}:\d{2}$/.test(String(x && x.t)) ? x.t : '', count: Math.min(20, Math.max(1, parseInt(x && x.count, 10) || 1)), every: Math.min(720, Math.max(0, parseInt(x && x.every, 10) || 0)) }))
-    .filter((x) => x.t);
-}
-
-app.post('/api/tasks/:row/reminder', requireAuth, async (req, res) => {
-  try {
-    if (!store.enabled) return res.status(400).json({ ok: false, error: 'التخزين الدائم غير مفعّل (اضبط DATA_SHEET_ID).' });
-    let email = req.session.user.email;
-    // المدير يضبط تذكيراً لمستخدم آخر عبر body.user
-    if (req.body.user && auth.hasRole(req.session.user, 'admin')) email = String(req.body.user).toLowerCase();
-    const methods = (req.body.methods || []).filter((m) => REMINDER_METHODS.includes(m));
-    const days = (req.body.days || req.body.offsets || []).filter((o) => REMINDER_OFFSETS.includes(o));
-    const dates = (req.body.dates || []).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
-    const times = sanitizeTimes(req.body.times);
-    // فهرس الاجتماع (اختياري): إن وُجد فهو تذكير اجتماع يُحسب نسبةً لموعد ذلك الاجتماع
-    const mi = parseInt(req.body.meeting, 10);
-    const meeting = (req.body.meeting != null && req.body.meeting !== '' && Number.isInteger(mi) && mi >= 0) ? String(mi) : '';
-    await store.setReminder(email, req.params.row, methods, days, dates, times, meeting);
-    res.json({ ok: true });
-  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
-});
-
-// إطلاق تذكير لحظي للمستخدم الحالي (بريد/تيليجرام) — يستدعيه محرّك التذكير عميلياً في الوقت المضبوط
-app.post('/api/tasks/:row/notify', requireAuth, async (req, res) => {
-  try {
-    const methods = (req.body.methods || []).filter((m) => ['email', 'telegram'].includes(m));
-    if (!methods.length) return res.json({ ok: true, sent: [] });
-    const tasks = await loadTasks(activeTab(req));
-    const t = tasks.find((x) => String(x.row) === String(req.params.row));
-    if (!t) return res.status(404).json({ ok: false, error: 'مهمة غير موجودة' });
-    const u = req.session.user;
-    const isOwner = (t.owners || []).map((o) => o.trim()).includes(String(u.name || '').trim());
-    const ownerNote = (!isOwner && t.owner) ? ` — المسؤول المعني: ${t.owner.replace(/\n+/g, '، ')}` : '';
-    const title = `${t.project}${t.file ? ' — ' + t.file : ''}`;
-    const line = `🔔 تذكير بمهمة: ${title}${ownerNote}${t.deadlineRaw ? ` (الموعد: ${t.deadlineRaw})` : ''}`;
-    const appUrl = process.env.APP_URL || '';
-    const sent = [];
-    if (methods.includes('email') && notify.emailEnabled()) {
-      try { await notify.sendEmail({ to: u.email, subject: `تذكير: ${t.project}`, html: `<div style="font-family:Cairo,Arial,sans-serif;direction:rtl;color:#2b2823">${esc(line)}${appUrl ? `<p style="margin-top:14px"><a href="${appUrl}" style="background:#bd6a43;color:#fff;padding:8px 16px;border-radius:8px;text-decoration:none">فتح اللوحة</a></p>` : ''}</div>` }); sent.push('email'); }
-      catch (e) { console.warn('notify email', e.message); }
-    }
-    if (methods.includes('telegram') && telegram.enabled && store.enabled) {
-      try {
-        const full = (await store.getUsersFull() || []).find((x) => x.email.toLowerCase() === u.email.toLowerCase());
-        if (full && full.telegramChatId) { const ok = await telegram.sendMessage(full.telegramChatId, `${telegram.esc(line)}${appUrl ? '\n' + appUrl : ''}`); if (ok) sent.push('telegram'); }
-      } catch (e) { console.warn('notify telegram', e.message); }
-    }
-    res.json({ ok: true, sent });
-  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
-});
-
-// ===== تغذية التقويم (ICS) — اشتراك دائم برمز شخصي =====
-app.get('/api/calendar/:token.ics', async (req, res) => {
-  try {
-    const user = await store.getUserByToken(req.params.token);
-    if (!user) return res.status(404).send('NOT FOUND');
-    const tasks = await loadTasks(DEFAULT_TAB);
-    const byRow = {}; tasks.forEach((t) => { byRow[String(t.row)] = t; });
-    const reminders = await store.getReminders(user.email);
-    res.set('Content-Type', 'text/calendar; charset=utf-8');
-    res.set('Content-Disposition', 'inline; filename="eo-dashboard.ics"');
-    res.send(calendar.buildICS(byRow, reminders));
-  } catch (e) { res.status(500).send('ERROR: ' + e.message); }
-});
-
-// ===== Telegram webhook: ربط رقم المستخدم بحسابه عند مشاركته رقمه مع البوت =====
-app.post('/api/telegram/webhook', async (req, res) => {
-  if (process.env.TELEGRAM_WEBHOOK_SECRET && req.get('x-telegram-bot-api-secret-token') !== process.env.TELEGRAM_WEBHOOK_SECRET) {
-    return res.sendStatus(403);
-  }
-  res.sendStatus(200); // ردّ سريع لتيليجرام
-  try {
-    const msg = (req.body && req.body.message) || null;
-    if (!msg) return;
-    const chatId = msg.chat && msg.chat.id;
-    if (!chatId) return;
-    if (msg.contact && msg.contact.phone_number) {
-      const phone = telegram.normPhone(msg.contact.phone_number);
-      const linked = store.enabled ? await store.linkTelegram(phone, chatId) : null;
-      await telegram.sendMessage(chatId, linked
-        ? `✅ تم ربط رقمك بحساب «${linked.name}». ستصلك تذكيرات المهام هنا.`
-        : '⚠️ لم نجد مستخدماً بهذا الرقم على اللوحة. تأكّد من إدخال رقمك (مع رمز الدولة) في حسابك، ثم أعد المشاركة.');
-    } else {
-      await telegram.sendWelcome(chatId);
-    }
-  } catch (e) { console.warn('telegram webhook:', e.message); }
-});
-
-// المهمة المجدولة: ملخص يومي عبر البريد و Push (يستدعيها GitHub Actions)
-async function runDailyDigest(req, res) {
-  const secret = req.get('x-cron-secret') || req.query.secret;
-  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
-    return res.status(401).json({ ok: false, error: 'رمز غير صالح' });
-  }
-  try {
-    const tasks = await loadTasks(activeTab(req), true);
-    const appUrl = process.env.APP_URL || '';
-    const digest = await notify.sendDailyDigest(tasks, appUrl);
-    // ملاحظة: تذكيرات المهام بالتاريخ/الوقت تُطلَق عميلياً في أوقاتها المضبوطة (لا من الـ cron)
-    res.json({ ok: true, mail: { enabled: notify.emailEnabled(), provider: notify.emailProvider() }, digest });
-  } catch (e) {
-    console.error('daily-digest', e.message);
-    res.status(500).json({ ok: false, error: e.message });
-  }
-}
-app.post('/api/cron/daily-digest', runDailyDigest);
-app.get('/api/cron/daily-digest', runDailyDigest);
-
-// نبضة التذكيرات بالوقت الدقيق: يستدعيها مجدول خارجي كل دقيقة/خمس دقائق فتصل التذكيرات دون فتح اللوحة
-async function runReminderTick(req, res) {
-  const secret = req.get('x-cron-secret') || req.query.secret;
-  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
-    return res.status(401).json({ ok: false, error: 'رمز غير صالح' });
-  }
-  try {
-    if (!store.enabled) return res.json({ ok: true, skipped: 'store-disabled' });
-    const reminders = await store.getAllReminders();
-    // خريطة الصف→المهمة عبر كل البروفايلات (البروفايل الافتراضي له الأولوية عند تطابق رقم الصف)
-    const profiles = await store.getProfiles();
-    const tasksByRow = {};
-    for (const p of profiles) {
-      try { const tasks = await loadTasks(p.tab, true); for (const t of tasks) if (!(String(t.row) in tasksByRow)) tasksByRow[String(t.row)] = t; }
-      catch (e) { console.warn('reminder-tick tab', p.tab, e.message); }
-    }
-    const appUrl = process.env.APP_URL || '';
-    const result = await notify.sendScheduledReminders(tasksByRow, reminders, appUrl, store);
-    res.json({ ok: true, ...result });
-  } catch (e) {
-    console.error('reminder-tick', e.message);
-    res.status(500).json({ ok: false, error: e.message });
-  }
-}
-app.post('/api/cron/reminders', runReminderTick);
-app.get('/api/cron/reminders', runReminderTick);
-
-// نسخة node-fetch الفعلية المثبّتة (للتشخيص) — نبحث في المواقع المحتملة داخل node_modules
-function pkgVersion(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')).version; } catch { return null; } }
-function nodeFetchVersion() {
-  const nm = path.join(__dirname, 'node_modules');
-  const candidates = [
-    path.join(nm, 'node-fetch', 'package.json'),
-    path.join(nm, 'gaxios', 'node_modules', 'node-fetch', 'package.json'),
-    path.join(nm, 'google-auth-library', 'node_modules', 'node-fetch', 'package.json'),
-  ];
-  for (const c of candidates) { const v = pkgVersion(c); if (v) return v; }
-  return 'unknown';
-}
-
-app.get('/api/health', (req, res) => {
-  res.json({
-    ok: true,
-    canWrite: sheets.canWrite,
-    tz: require('./lib/dates').TZ,
-    storeEnabled: store.enabled,
-    attachmentsEnabled: drive.enabled,
-    mailProvider: notify.emailProvider(),
-    notifyEmailSet: !!process.env.NOTIFY_EMAIL,
-    node: process.version,         // إصدار Node الفعلي على Render
-    nodeFetch: nodeFetchVersion(), // إصدار node-fetch الفعلي (يجب أن يكون 2.6.13)
-    dnsOrder: (() => { try { return require('dns').getDefaultResultOrder(); } catch { return 'n/a'; } })(),
   });
-});
-
-// تشخيص حيّ لاتصال Google: يحاول جلب رمز عبر نفس مكتبات التطبيق ويعيد النتيجة الدقيقة
-app.get('/api/diag/google', async (req, res) => {
-  const out = { node: process.version, nodeFetch: nodeFetchVersion() };
-  try {
-    const { request } = require('gaxios');
-    const r = await request({
-      url: 'https://oauth2.googleapis.com/token', method: 'POST',
-      data: { grant_type: 'x' }, validateStatus: () => true, retry: false, timeout: 15000,
-    });
-    out.googleTransport = 'OK';   // اكتمل الاتصال (حتى لو رمز 400) ⇒ المشكلة محلولة
-    out.googleStatus = r.status;
-  } catch (e) {
-    out.googleTransport = 'FAIL'; // فشل النقل ⇒ ما زالت المشكلة قائمة
-    out.googleError = e.message;
-  }
-  res.json(out);
-});
-
-// تشخيص تيليجرام (مدير): يكشف الحلقة المعطوبة — التفعيل / الـ webhook / الحسابات المربوطة / إعداد الـ cron
-async function diagTelegram(req, res) {
-  try {
-    const bot = await telegram.getMe();
-    const webhook = await telegram.getWebhookInfo();
-    let linkedUsers = [];
-    if (store.enabled) {
-      try { linkedUsers = ((await store.getUsersFull()) || []).filter((u) => u.telegramChatId).map((u) => ({ name: u.name, email: u.email })); }
-      catch (e) { /* تجاهل */ }
-    }
-    res.json({
-      ok: true,
-      enabled: telegram.enabled,            // هل TELEGRAM_BOT_TOKEN مضبوط؟
-      bot,                                  // username/id البوت أو خطأ التوكن
-      webhook,                              // url + pending + lastErrorMessage (أهم مؤشّر)
-      appUrl: process.env.APP_URL || null,  // يلزم لتسجيل الـ webhook
-      cronSecretSet: !!process.env.CRON_SECRET,
-      storeEnabled: store.enabled,
-      linkedCount: linkedUsers.length,      // كم حساباً مربوطاً فعلاً
-      linkedUsers,
-    });
-  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+  const xbuf = await wb.xlsx.writeBuffer();
+  return injectExcelOrgChart(xbuf, data.hrRows);
 }
-app.get('/api/diag/telegram', requireAuth, requireRole('admin'), diagTelegram);
 
-// إرسال رسالة اختبار إلى حساب المدير الحالي (يعزل مشكلة «الإرسال» عن مشكلة «الجدولة»)
-async function diagTelegramTest(req, res) {
-  try {
-    if (!telegram.enabled) return res.json({ ok: false, error: 'البوت غير مفعّل (TELEGRAM_BOT_TOKEN غير مضبوط)' });
-    if (!store.enabled) return res.json({ ok: false, error: 'التخزين الدائم غير مفعّل' });
-    const me = ((await store.getUsersFull()) || []).find((u) => u.email.toLowerCase() === String(req.session.user.email).toLowerCase());
-    if (!me) return res.json({ ok: false, error: 'تعذّر إيجاد حسابك في التخزين' });
-    if (!me.telegramChatId) return res.json({ ok: false, error: 'حسابك غير مربوط بتيليجرام (لا يوجد chatId). أكمِل الربط: شارك رقمك مع البوت.' });
-    const r = await telegram.trySend(me.telegramChatId, '✅ رسالة اختبار من لوحة الإدارة التنفيذية — إن وصلتك هذه فإنّ إرسال تيليجرام يعمل بشكل سليم.');
-    res.json({ ok: r.ok, error: r.error || null, chatId: me.telegramChatId, sentTo: me.name });
-  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+// ════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
+//  WORD GENERATOR  (v7 — matches "الملف المطلوب.docx" exactly)
+//  Sakkal Majalla · full-width RTL tables · letterhead header
+//  · real Organisation-Chart SmartArt coloured by employee type
+// ════════════════════════════════════════════════════════════
+
+const C = {
+  DARK_BLUE:'1F3864', GREY_HDR:'AEAAAA', COL_HDR_BLK:'262626',
+  COL_HDR_BLU:'D9E2F3', PROD1:'8EA9DB', PROD2:'F4B084', PROD3:'8EAADB',
+  MON_ODD:'D9E1F2', MON_EVEN:'B4C6E7', MON_ODD2:'FCE4D6', MON_EVEN2:'F8CBAD',
+  SUBTOT:'808080', SUM_LBL:'DEEAF6', SUM_VAL:'FBE4D5',
+  ROW_ODD:'FBE4D5', ROW_EVEN:'F2F2F2', WHITE:'FFFFFF',
+  NUM_TINT:'FBE4D5',                 // peach tint of the "#" column cells
+  TITLE_BLUE:'2F5496', TITLE_ORANGE:'ED7D31',
+  // org-chart node colours by employee type (theme accents)
+  ORG_ADM:'accent1', ORG_EXE:'accent6', ORG_SVC:'accent2',
+};
+
+const PAGE = {
+  size:{ width:11906, height:16838, orientation:PageOrientation.LANDSCAPE },
+  margin:{ top:720, right:720, bottom:720, left:720, header:720, footer:1545 },
+};
+const TW   = 15388;            // table content width (DXA)
+const FONT = 'Sakkal Majalla';
+
+// exact per-table column widths (DXA) extracted from الملف المطلوب
+const COLW = {
+  summary : [7740,7648],
+  founding: [454,857,4206,1165,4677,1529,713,1787],
+  products: [4822,4841,5705],
+  revenue : [2313,1167,940,940,940,940,940,982,982,982,941,1094,1094,1113],
+  ops     : [1332,877,1213,964,986,986,986,987,1036,987,987,1036,990,990,1011],
+  hr      : [459,2791,1800,2600,2100,2300,988,2240],
+  fixed   : [609,1530,3268,4318,2342,902,2419],
+  dep     : [411,857,4164,1397,4638,1486,687,1748],
+};
+
+const BDR = (c='auto',s=4) => ({style:BorderStyle.SINGLE,size:s,color:c});
+const BORDERS = {top:BDR(),bottom:BDR(),left:BDR(),right:BDR()};
+
+// ── Cell ──────────────────────────────────────────────────────
+function C_(text, o={}) {
+  const {fill,bold=true,sz=28,color,align=AlignmentType.CENTER,w,colSpan,rowSpan,
+         vAlign=VerticalAlign.CENTER,font=FONT} = o;
+  const tc = {};
+  if (fill) tc.shading = {type:ShadingType.CLEAR, fill, color:'auto'};
+  if (w)    tc.width   = {size:w, type:WidthType.DXA};
+  if (colSpan) tc.columnSpan = colSpan;
+  if (rowSpan>1) tc.rowSpan = rowSpan;
+  tc.borders = BORDERS;
+  tc.margins = {top:40,bottom:40,left:80,right:80};
+  tc.verticalAlign = vAlign;
+  const textColor = color || (
+    (fill===C.DARK_BLUE||fill===C.COL_HDR_BLK||fill===C.SUBTOT) ? C.WHITE : '000000'
+  );
+  return new TableCell({...tc, children:[new Paragraph({
+    bidirectional:true, alignment:align, spacing:{after:0,line:240,lineRule:'auto'},
+    children:[new TextRun({text:String(text??''),bold,size:sz,font,color:textColor})],
+  })]});
 }
-app.get('/api/diag/telegram/test', requireAuth, requireRole('admin'), diagTelegramTest);
-app.post('/api/diag/telegram/test', requireAuth, requireRole('admin'), diagTelegramTest);
 
-// تشخيص جدولة التذكيرات (مدير): محاكاة جافة تكشف لكل تذكير هل يُنتج لحظة إطلاق مستحقّة الآن ولماذا.
-// افتراضياً يحلّل تذكيراتك؛ ?all=1 لكل المستخدمين، أو ?user=email لمستخدم محدّد.
-app.get('/api/diag/reminders', requireAuth, requireRole('admin'), async (req, res) => {
+// ── Table ─────────────────────────────────────────────────────
+function T_(rows, W) {
+  return new Table({width:{size:TW,type:WidthType.DXA},columnWidths:W,
+                    bidirectional:true,visuallyRightToLeft:true,rows});
+}
+// section title row
+function secHdr(title, cols, fill=C.DARK_BLUE) {
+  return new TableRow({tableHeader:true, children:[
+    C_(title,{fill,bold:true,sz:32,colSpan:cols,w:TW,align:AlignmentType.CENTER,
+      color:fill===C.GREY_HDR?'000000':C.WHITE})]});
+}
+// column header row
+function colHdr(labels, W, fill=C.COL_HDR_BLU) {
+  return new TableRow({tableHeader:true, children:
+    labels.map((h,i)=>C_(h,{fill,bold:true,sz:28,w:W[i],
+      color:fill===C.COL_HDR_BLK?C.WHITE:'000000'}))});
+}
+// total row (label spans all but last column)
+function totRow(label, value, cols, lastW, fill=C.DARK_BLUE) {
+  return new TableRow({children:[
+    C_(label,{fill,bold:true,sz:28,colSpan:cols-1,w:TW-lastW,align:AlignmentType.CENTER}),
+    C_(value,{fill,bold:true,sz:28,w:lastW})]});
+}
+// vertical spacer paragraph
+function SP(before=200,sz=28) {
+  return new Paragraph({spacing:{before,after:0},
+    children:[new TextRun({text:'',size:sz,font:FONT})]});
+}
+function PB(){ return new Paragraph({children:[new PageBreak()]}); }
+
+function fN(v){const n=parseFloat(String(v||'0').replace(/[^0-9.-]/g,''));
+  if(!n||isNaN(n))return '0';
+  return n.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2});}
+function fM(v){const n=parseFloat(String(v||'0').replace(/[^0-9.-]/g,''));
+  if(isNaN(n))return '0 $';
+  return n.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2})+' $';}
+
+const PAL=[{dark:C.PROD1,mo:C.MON_ODD ,me:C.MON_EVEN },
+           {dark:C.PROD2,mo:C.MON_ODD2,me:C.MON_EVEN2},
+           {dark:C.PROD3,mo:C.MON_ODD ,me:C.MON_EVEN }];
+function PC(i){return PAL[i%PAL.length];}
+function norm(arr,tw){const s=arr.reduce((a,b)=>a+b,0);
+  const r=arr.map(w=>Math.round(w*tw/s));
+  r[r.length-1]=tw-r.slice(0,-1).reduce((a,b)=>a+b,0);return r;}
+
+// "#" cell (peach) + alternating data-row fill
+function dFill(i){ return i%2===0 ? undefined : C.ROW_EVEN; }
+
+// ── letterhead header (anchored full-page background image) ──
+function buildHeader() {
+  if (!LETTERHEAD_PNG) return undefined;
+  return new Header({children:[ new Paragraph({children:[ new ImageRun({
+    data: LETTERHEAD_PNG,
+    transformation:{ width:1122, height:791 },   // EMU 10690495×7535545 ÷ 9525
+    floating:{
+      horizontalPosition:{ relative:HorizontalPositionRelativeFrom.PAGE, align:HorizontalPositionAlign.LEFT },
+      verticalPosition:{ relative:VerticalPositionRelativeFrom.PARAGRAPH, offset:-449580 },
+      behindDocument:true, allowOverlap:true,
+    },
+  }) ] }) ]});
+}
+
+// ════════════════════════════════════════════════════════════════
+// label/value table in the same visual identity as the summary table
+function lblValTable(title, rows){
+  const W = norm(COLW.summary, TW);
+  return T_([
+    new TableRow({children:[C_(title,{fill:C.DARK_BLUE,bold:true,sz:32,colSpan:2,w:TW,align:AlignmentType.CENTER,color:C.WHITE})]}),
+    ...rows.map(([l,v])=>new TableRow({children:[
+      C_(l,{fill:C.SUM_LBL,bold:true,sz:28,w:W[0],align:AlignmentType.CENTER}),
+      C_(String(v==null?'':v),{fill:C.SUM_VAL,bold:true,sz:28,w:W[1],align:AlignmentType.CENTER}),
+    ]})),
+  ], W);
+}
+
+async function generateWord(data) {
+  const pids = Object.keys(data.products||{}).filter(p=>data.products[p]?.name);
+  const ch = [];
+
+  // ── Title (the logo sits in the page header) ─────────────
+  ch.push(
+    SP(0,26),
+    new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{before:1100,after:0},
+      children:[new TextRun({text:'قسم المشاريع التنموية',bold:true,size:34,font:FONT,color:C.TITLE_BLUE})]}),
+    new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{before:60,after:260},
+      children:[new TextRun({text:'نموذج طرح دراسة مشروع',bold:true,size:28,font:FONT,color:C.TITLE_ORANGE})]}),
+  );
+
+  // each table lives in its OWN section, vertically centred on its page
+  const sections = [];
+  const mkSec = (children, valign=VerticalAlign.CENTER) =>
+    ({ properties:{ page:PAGE, verticalAlign:valign }, headers:{default:buildHeader()}, children });
+  const S = {};
+  const page = (...tbls)=> mkSec(tbls, VerticalAlign.CENTER);
+
+  // ══ معلومات المشروع (حقول صفحة تفاصيل المشروع فقط) ══
+  S.project = page(lblValTable('معلومات المشروع', [
+    ['عنوان المشروع', data.projectTitle||''],
+    ['فكرة المشروع', data.projectIdea||''],
+    ['الشرائح المستهدفة', data.targetSegments||''],
+    ['نوع المكان المقترح', data.placeType||''],
+    ['وضع المكان', data.placeStatus||''],
+    ['عنوان / موقع المشروع', data.projectAddress||''],
+  ]));
+
+  // ══ الخلاصة المالية السنوية (لوحة بصرية محقونة) + عدد الموظفين ══
+  S.summary = mkSec([
+    new Paragraph({bidirectional:true, alignment:AlignmentType.CENTER, spacing:{before:120,after:0},
+      children:[new TextRun({text:'الخلاصة المالية السنوية', bold:true, size:42, font:FONT, color:C.DARK_BLUE})]}),
+    new Paragraph({bidirectional:true, alignment:AlignmentType.CENTER, spacing:{before:60,after:120},
+      children:[new TextRun({text:`عدد الموظفين في المشروع: ${String(data.summary?.employees||'0')}`, bold:true, size:30, font:FONT, color:C.TITLE_ORANGE})]}),
+    new Paragraph({bidirectional:true, alignment:AlignmentType.CENTER, spacing:{before:0,after:0},
+      children:[new TextRun({text:'[[FINANCE]]', size:2, font:FONT, color:'FFFFFF'})]}),
+  ], VerticalAlign.TOP);
+
+  // ══ معلومات مقدّم المشروع ══
+  S.applicant = page(lblValTable('معلومات مقدّم المشروع', [
+    ['اسم مقدم المشروع', data.applicantName||''],
+    ['رقم الهاتف', data.applicantPhone||''],
+    ['تاريخ الميلاد', data.applicantBirth||''],
+    ['مكان الإقامة', data.applicantResidence||''],
+    ['العمل الحالي', data.applicantJob||''],
+    ['عدد سنوات الخبرة', data.applicantExpYears||''],
+    ['الخبرة المرتبطة بالمشروع', data.applicantExperience||''],
+  ]));
+
+  // ══ 2. FOUNDING ═════════════════════════════════════════
+  if (data.foundingRows?.length) {
+    const W = norm(COLW.founding,TW);
+    let tot=0; data.foundingRows.forEach(r=>{tot+=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0;});
+    S.founding = page(T_([
+      secHdr('التكاليف التأسيسية',8),
+      colHdr(['#','الصنف','البيان','الاهتلاك','ملاحظات','التكلفة للواحدة','العدد','التكلفة الإجمالية'],W,C.COL_HDR_BLU),
+      ...data.foundingRows.map((r,i)=>new TableRow({children:[
+        C_(i+1,         {fill:C.NUM_TINT,sz:28,w:W[0]}),
+        C_(r.cat||'',   {fill:dFill(i),sz:28,w:W[1]}),
+        C_(r.bayan||'', {fill:dFill(i),sz:28,w:W[2]}),
+        C_(r.dep?'a':'r',{fill:dFill(i),sz:28,w:W[3],font:'Marlett',color:'000000'}),
+        C_(r.notes||'', {fill:dFill(i),sz:28,w:W[4]}),
+        C_(fM(r.price), {fill:dFill(i),sz:28,w:W[5]}),
+        C_(r.qty||'',   {fill:dFill(i),sz:28,w:W[6]}),
+        C_(fM(r.total), {fill:dFill(i),sz:28,w:W[7]}),
+      ]})),
+      totRow('الإجمالي',fM(tot),8,W[7]),
+    ],W));
+  }
+
+  // ══ 3. PRODUCTS ═════════════════════════════════════════
+  if (pids.length) {
+    const W = norm(COLW.products,TW);
+    const prodRows = [
+      secHdr('جدول المنتجات',3,C.GREY_HDR),
+      colHdr(['البيان','الواحدة','المكونات'],W,C.COL_HDR_BLK),
+    ];
+    pids.forEach((pid,pi)=>{
+      const p=data.products[pid]; const comps=(p.components||[]).filter(c=>c); const pc=PC(pi);
+      const n=Math.max(comps.length,1);
+      comps.forEach((comp,ci)=>{
+        if(ci===0){
+          prodRows.push(new TableRow({children:[
+            C_(p.name||'',{fill:pc.dark,sz:28,w:W[0],color:'000000',rowSpan:n}),
+            C_(p.unit||'',{fill:pc.dark,sz:28,w:W[1],color:'000000',rowSpan:n}),
+            C_(comp,{fill:pc.dark,sz:28,w:W[2],color:'000000'}),
+          ]}));
+        } else {
+          prodRows.push(new TableRow({children:[C_(comp,{fill:pc.dark,sz:28,w:W[2],color:'000000'})]}));
+        }
+      });
+    });
+    S.products = page(T_(prodRows,W));
+  }
+
+  // ══ PAGE 6: التسويق والمبيع ═════════════════════════════
+  {
+    const pm = s => parseFloat(String(s||'0').replace(/[^0-9.-]/g,''))||0;
+    const mkM = pm(data.marketingCost), mkA = mkM*12;
+    const mkTable = lblValTable('التسويق والمبيع', [
+      ['خطة التسويق', data.marketingPlan||'—'],
+      ['كلفة التسويق الشهرية', fM(mkM)],
+      ['كلفة التسويق السنوية', fM(mkA)],
+      ['قنوات المبيع', data.salesChannels||'—'],
+    ]);
+    const comps = (data.competitors||[]).filter(c=>c && (c.name||c.strengths||c.weaknesses));
+    const kids = [mkTable];
+    if (comps.length) {
+      const Wc = norm([900,4200,5144,5144], TW);
+      kids.push(SP(220,20), T_([
+        secHdr('جدول المنافسين',4),
+        colHdr(['#','اسم المنافس','نقاط القوة','نقاط الضعف'],Wc,C.COL_HDR_BLU),
+        ...comps.map((c,i)=>new TableRow({children:[
+          C_(i+1,            {fill:C.NUM_TINT,sz:28,w:Wc[0]}),
+          C_(c.name||'',     {fill:dFill(i),sz:28,w:Wc[1]}),
+          C_(c.strengths||'',{fill:dFill(i),sz:28,w:Wc[2]}),
+          C_(c.weaknesses||'',{fill:dFill(i),sz:28,w:Wc[3]}),
+        ]})),
+      ],Wc));
+    }
+    S.mkt = mkSec(kids, VerticalAlign.CENTER);
+  }
+
+  // ══ 4. REVENUE ══════════════════════════════════════════
+  if (pids.length) {
+    const W = norm(COLW.revenue,TW);
+    const revRows = [
+      secHdr('الإيرادات المتوقعة',14,C.GREY_HDR),
+      colHdr(['البيان','الواحدة',...MONTHS],W,C.COL_HDR_BLK),
+    ];
+    pids.forEach((pid,pi)=>{
+      const p=data.products[pid]; const rev=data.revenueData?.[pid]||[]; const pc=PC(pi);
+      revRows.push(new TableRow({children:[
+        C_(p.name,{fill:pc.dark,bold:true,sz:28,w:W[0],color:'000000'}),
+        C_(p.unit||'',{fill:pc.dark,bold:true,sz:28,w:W[1],color:'000000'}),
+        ...MONTHS.map((_,m)=>C_(fN(rev[m]?.qty),{fill:m%2===0?pc.mo:pc.me,sz:28,w:W[m+2]})),
+      ]}));
+      revRows.push(new TableRow({children:[
+        C_('سعر مبيع الواحدة',{fill:pc.dark,sz:28,w:W[0],color:'000000'}),
+        C_('$',{fill:pc.dark,sz:28,w:W[1],color:'000000'}),
+        ...MONTHS.map((_,m)=>C_(fN(rev[m]?.unitPrice),{fill:m%2===0?pc.mo:pc.me,sz:28,w:W[m+2]})),
+      ]}));
+      revRows.push(new TableRow({children:[
+        C_('سعر المبيع الإجمالي',{fill:pc.dark,sz:28,w:W[0],color:'000000'}),
+        C_('$',{fill:pc.dark,sz:28,w:W[1],color:'000000'}),
+        ...MONTHS.map((_,m)=>C_(fN(rev[m]?.total||0),{fill:m%2===0?pc.mo:pc.me,sz:28,w:W[m+2]})),
+      ]}));
+    });
+    const mTots = MONTHS.map((_,m)=>{let t=0;pids.forEach(pid=>{t+=parseFloat(String(data.revenueData?.[pid]?.[m]?.total||'0').replace(/[^0-9.-]/g,''))||0;});return '\u200F'+fM(t);});
+    revRows.push(new TableRow({children:[
+      C_('الإجمالي',{fill:C.COL_HDR_BLK,bold:true,sz:28,colSpan:2,w:W[0]+W[1],align:AlignmentType.CENTER}),
+      ...mTots.map((v,m)=>C_(v,{fill:C.COL_HDR_BLK,bold:true,sz:28,w:W[m+2]})),
+    ]}));
+    const revAnnual = MONTHS.reduce((a,_,m)=>{let t=0;pids.forEach(pid=>{t+=parseFloat(String(data.revenueData?.[pid]?.[m]?.total||'0').replace(/[^0-9.-]/g,''))||0;});return a+t;},0);
+    revRows.push(new TableRow({children:[
+      C_('إجمالي الإيرادات السنوية:  \u200E$'+fN(revAnnual),{fill:C.DARK_BLUE,bold:true,sz:30,colSpan:14,w:TW,align:AlignmentType.CENTER,color:C.WHITE}),
+    ]}));
+    S.revenue = page(T_(revRows,W));
+  }
+
+  // ══ 5. OPS ══════════════════════════════════════════════
+  if (pids.length && data.opsData) {
+    const W = norm(COLW.ops,TW);
+    const opsRows = [
+      secHdr('التكاليف التشغيلية',15,C.GREY_HDR),
+      colHdr(['البيان','الواحدة','التفاصيل',...MONTHS],W,C.COL_HDR_BLK),
+    ];
+    pids.forEach((pid,pi)=>{
+      const p=data.products[pid]; const comps=(p.components||[]).filter(c=>c);
+      const opsD=data.opsData?.[pid]||{}; const pc=PC(pi); const n=Math.max(comps.length,1);
+      comps.forEach((comp,ci)=>{
+        const vals=MONTHS.map((_,m)=>fM(opsD[`${ci}_${m}`]));
+        if(ci===0){
+          opsRows.push(new TableRow({children:[
+            C_(p.name||'',{fill:pc.dark,sz:28,w:W[0],color:'000000',rowSpan:n}),
+            C_(p.unit||'',{fill:pc.dark,sz:28,w:W[1],color:'000000',rowSpan:n}),
+            C_(comp,{fill:pc.dark,sz:28,w:W[2],color:'000000'}),
+            ...vals.map((v,m)=>C_(v,{fill:m%2===0?pc.mo:pc.me,sz:28,w:W[m+3],color:'000000'})),
+          ]}));
+        } else {
+          opsRows.push(new TableRow({children:[
+            C_(comp,{fill:pc.dark,sz:28,w:W[2],color:'000000'}),
+            ...vals.map((v,m)=>C_(v,{fill:m%2===0?pc.mo:pc.me,sz:28,w:W[m+3],color:'000000'})),
+          ]}));
+        }
+      });
+      const subVals=MONTHS.map((_,m)=>fM(opsD[`sub_${m}`]||0));
+      opsRows.push(new TableRow({children:[
+        C_(`إجمالي ${p.name}`,{fill:C.SUBTOT,bold:true,sz:28,colSpan:3,w:W[0]+W[1]+W[2],align:AlignmentType.CENTER}),
+        ...subVals.map((v,m)=>C_(v,{fill:C.SUBTOT,bold:true,sz:28,w:W[m+3]})),
+      ]}));
+    });
+    const opsTots=MONTHS.map((_,m)=>{let t=0;pids.forEach(pid=>{t+=parseFloat(String(data.opsData?.[pid]?.[`sub_${m}`]||'0').replace(/[^0-9.-]/g,''))||0;});return '\u200F'+fM(t);});
+    opsRows.push(new TableRow({children:[
+      C_('الإجمالي',{fill:C.COL_HDR_BLK,bold:true,sz:28,colSpan:3,w:W[0]+W[1]+W[2],align:AlignmentType.CENTER}),
+      ...opsTots.map((v,m)=>C_(v,{fill:C.COL_HDR_BLK,bold:true,sz:28,w:W[m+3]})),
+    ]}));
+    const opsAnnual = MONTHS.reduce((a,_,m)=>{let t=0;pids.forEach(pid=>{t+=parseFloat(String(data.opsData?.[pid]?.[`sub_${m}`]||'0').replace(/[^0-9.-]/g,''))||0;});return a+t;},0);
+    opsRows.push(new TableRow({children:[
+      C_('إجمالي التكاليف التشغيلية السنوية:  \u200E$'+fN(opsAnnual),{fill:C.DARK_BLUE,bold:true,sz:30,colSpan:15,w:TW,align:AlignmentType.CENTER,color:C.WHITE}),
+    ]}));
+    S.ops = page(T_(opsRows,W));
+  }
+
+  // ══ 6. HR ════════════════════════════════════════════════
+  if (data.hrRows?.length) {
+    const W=norm(COLW.hr,TW);
+    let tot=0; data.hrRows.forEach(r=>{
+      const q=parseFloat(r.qty)||0;
+      const s=parseFloat(String(r.salary||'0').replace(/[^0-9.-]/g,''))||0;
+      const mo=parseFloat(r.months)||12;
+      tot += q*s*mo;
+    });
+    S.hr = page(T_([
+      secHdr('الموارد البشرية',8),
+      colHdr(['#','المنصب','النوع','تابع لـ','الراتب الشهري الفردي','عدد أشهر الدوام في السنة','العدد','الراتب الشهري الإجمالي'],W,C.COL_HDR_BLU),
+      ...data.hrRows.map((r,i)=>new TableRow({children:[
+        C_(i+1,            {fill:C.NUM_TINT,sz:28,w:W[0]}),
+        C_(r.position||'', {fill:dFill(i),sz:28,w:W[1]}),
+        C_(r.type||'',     {fill:dFill(i),sz:28,w:W[2]}),
+        C_(r.reports||'----------', {fill:dFill(i),sz:28,w:W[3]}),
+        C_(fM(r.salary),   {fill:dFill(i),sz:28,w:W[4]}),
+        C_(r.months||'12', {fill:dFill(i),sz:28,w:W[5]}),
+        C_(r.qty||'',      {fill:dFill(i),sz:28,w:W[6]}),
+        C_(fM(r.total),    {fill:dFill(i),sz:28,w:W[7]}),
+      ]})),
+      totRow('الإجمالي (سنوياً)',fM(tot),8,W[7]),
+    ],W));
+
+    // org-chart page (own section; SmartArt-like shapes injected post-process)
+    S.org = mkSec([
+      new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{before:200,after:200},
+        children:[new TextRun({text:'الهيكل التنظيمي',bold:true,size:32,font:FONT,color:C.DARK_BLUE})]}),
+      new Paragraph({bidirectional:true,alignment:AlignmentType.CENTER,spacing:{before:0,after:0},
+        children:[new TextRun({text:'[[ORGCHART]]',size:2,font:FONT,color:'FFFFFF'})]}),
+    ], VerticalAlign.TOP);
+  }
+
+  // ══ 7. FIXED ════════════════════════════════════════════
+  if (data.fixedRows?.length) {
+    const W=norm(COLW.fixed,TW);
+    const isSalaryRow=(r)=>(r.cat==='رواتب') && (String(r.bayan||'').includes('الموظفين') || String(r.notes||'').includes('تلقائي'));
+    let tot=0; data.fixedRows.forEach(r=>{
+      const t=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0;
+      tot += t;   // all rows are monthly now (salary & marketing rows have qty=1)
+    });
+    S.fixed = page(T_([
+      secHdr('التكاليف الثابتة',7),
+      colHdr(['#','الصنف','البيان','ملاحظات','التكلفة الشهرية للواحدة','العدد','التكلفة الشهرية الإجمالية'],W,C.COL_HDR_BLU),
+      ...data.fixedRows.map((r,i)=>new TableRow({children:[
+        C_(i+1,         {fill:C.NUM_TINT,sz:28,w:W[0]}),
+        C_(r.cat||'',   {fill:dFill(i),sz:28,w:W[1]}),
+        C_(r.bayan||'', {fill:dFill(i),sz:28,w:W[2]}),
+        C_(r.notes||'', {fill:dFill(i),sz:28,w:W[3]}),
+        C_(fM(r.price), {fill:dFill(i),sz:28,w:W[4]}),
+        C_(r.qty||'',   {fill:dFill(i),sz:28,w:W[5]}),
+        C_(fM(r.total), {fill:dFill(i),sz:28,w:W[6]}),
+      ]})),
+      totRow('الإجمالي',fM(tot),7,W[6]),
+    ],W));
+  }
+
+  // ══ 8. DEP ══════════════════════════════════════════════
+  if (data.depRows?.length) {
+    const W=norm(COLW.dep,TW);
+    let tot=0; data.depRows.forEach(r=>{tot+=parseFloat(String(r.total||'0').replace(/[^0-9.-]/g,''))||0;});
+    S.dep = page(T_([
+      secHdr('الاهتلاك',8),
+      colHdr(['#','الصنف','البيان','نسبة الاهتلاك','ملاحظات','قيمة الاهتلاك للواحدة','العدد','قيمة الاهتلاك الإجمالية'],W,C.COL_HDR_BLU),
+      ...data.depRows.map((r,i)=>new TableRow({children:[
+        C_(i+1,               {fill:C.NUM_TINT,sz:28,w:W[0]}),
+        C_(r.cat||'',         {fill:dFill(i),sz:28,w:W[1]}),
+        C_(r.bayan||'',       {fill:dFill(i),sz:28,w:W[2]}),
+        C_((r.pct||'0')+' %', {fill:dFill(i),sz:28,w:W[3]}),
+        C_(r.notes||'',       {fill:dFill(i),sz:28,w:W[4]}),
+        C_(fM(r.perUnit),     {fill:dFill(i),sz:28,w:W[5]}),
+        C_(r.qty||'',         {fill:dFill(i),sz:28,w:W[6]}),
+        C_(fM(r.total),       {fill:dFill(i),sz:28,w:W[7]}),
+      ]})),
+      totRow('إجمالي قيمة الاهتلاك',fM(tot),8,W[7]),
+    ],W));
+  }
+
+  // ترتيب الصفحات النهائي المطلوب
+  [S.applicant, S.project, S.mkt, S.founding, S.products, S.revenue, S.ops, S.hr, S.org, S.fixed, S.dep, S.summary]
+    .forEach(sec => { if (sec) sections.push(sec); });
+  const buf = await Packer.toBuffer(new Document({sections}));
+  const withChart = await injectOrgChart(buf, data.hrRows);
+  const withFinance = await injectFinance(withChart, data.summary);
+  return finalizeDocx(withFinance);
+}
+
+// docx may emit word/fontTable.xml without a relationship → add it so the
+// package validates cleanly (otherwise MS Word may flag "unreadable content").
+async function finalizeDocx(buffer){
+  try{
+    const zip=await JSZip.loadAsync(buffer);
+    const relsPath='word/_rels/document.xml.rels';
+    const relsFile=zip.file(relsPath), ftFile=zip.file('word/fontTable.xml');
+    if(relsFile && ftFile){
+      let rels=await relsFile.async('string');
+      if(!rels.includes('fontTable.xml')){
+        const ids=[...rels.matchAll(/Id="rId(\d+)"/g)].map(m=>parseInt(m[1]));
+        const nid=(ids.length?Math.max(...ids):0)+1;
+        rels=rels.replace('</Relationships>',
+          `<Relationship Id="rId${nid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/></Relationships>`);
+        zip.file(relsPath, rels);
+        return zip.generateAsync({type:'nodebuffer', compression:'DEFLATE'});
+      }
+    }
+  }catch(_){ /* return original on any issue */ }
+  return buffer;
+}
+
+// ════════════════════════════════════════════════════════════
+//  SmartArt — real Organisation Chart (orgChart1 / accent1_2)
+//  Reuses the genuine layout/colours/quick-style template parts
+//  and generates data1.xml with per-node colour by employee type.
+// ════════════════════════════════════════════════════════════
+function gid(){ return '{'+crypto.randomUUID().toUpperCase()+'}'; }
+
+// light fill (≈ accent lighter 40%) + darker border, by employee type
+function orgFill(type){
+  if(type==='إداري')     return {fill:'8EAADB', line:'4472C4'}; // blue
+  if(type==='مزود خدمة') return {fill:'F4B083', line:'ED7D31'}; // orange
+  return {fill:'A9D18E', line:'70AD47'};                        // green (تنفيذي + default)
+}
+
+// expand employees by quantity → individual nodes + position→id map
+function buildPersons(hrRows){
+  const persons=[];
+  (hrRows||[]).forEach(r=>{
+    const qty=Math.max(parseInt(r.qty)||1,1);
+    for(let k=0;k<qty;k++)
+      persons.push({id:gid(),pos:(r.position||'').trim(),type:(r.type||'').trim(),reports:(r.reports||'').trim()});
+  });
+  const posId={}; persons.forEach(p=>{ if(p.pos && !(p.pos in posId)) posId[p.pos]=p.id; });
+  return {persons,posId};
+}
+
+// build hierarchy tree (roots + children) from persons
+function buildOrgTree(persons,posId){
+  const byId={}; persons.forEach(p=>byId[p.id]={...p,children:[]});
+  const roots=[];
+  persons.forEach(p=>{
+    const pid=(p.reports && posId[p.reports] && posId[p.reports]!==p.id) ? posId[p.reports] : null;
+    if(pid && byId[pid]) byId[pid].children.push(byId[p.id]); else roots.push(byId[p.id]);
+  });
+  return roots;
+}
+
+// ── org-chart layout (positions in EMU; parents centred over children) ──
+function orgLayout(hrRows){
+  const {persons,posId}=buildPersons(hrRows);
+  const roots=buildOrgTree(persons,posId);
+  const boxW=1750000, boxH=820000, hGap=240000, vGap=620000;
+  let cursor=0;
+  (function place(nodes,depth){
+    nodes.forEach(n=>{
+      n.depth=depth;
+      if(!n.children.length){ n.x=cursor*(boxW+hGap); cursor++; }
+      else { place(n.children,depth+1); n.x=(n.children[0].x+n.children[n.children.length-1].x)/2; }
+      n.y=depth*(boxH+vGap);
+    });
+  })(roots,0);
+  const all=[]; (function col(nodes){nodes.forEach(n=>{all.push(n); n.children.length&&col(n.children);});})(roots);
+  if(!all.length) return null;
+  const W=Math.max(...all.map(n=>n.x))+boxW;
+  const H=Math.max(...all.map(n=>n.y))+boxH;
+  return {all,boxW,boxH,vGap,W,H};
+}
+
+// ── SmartArt-like org chart: individual anchored shapes (text renders everywhere),
+//    boxes + elbow connectors, vertically centred on the page (recomputed per size).
+function buildOrgChartParagraphXml(hrRows){
+  const L=orgLayout(hrRows);
+  if(!L) return '';
+  const EMU_IN=914400, TWIP=635;
+  const pageW=16838*TWIP, pageH=11906*TWIP;
+  const safeTop=1.75*EMU_IN, safeBot=1.2*EMU_IN;
+  const availH=(pageH-safeBot)-safeTop;
+  const targetW=pageW-2*520000;
+  const scale=Math.min(1, targetW/L.W, availH/L.H);
+  const sx=v=>Math.round(v*scale);
+  const chartW=Math.round(L.W*scale), chartH=Math.round(L.H*scale);
+  const xOff=Math.round((pageW-chartW)/2);
+  const yOff=Math.round(safeTop+(availH-chartH)/2);
+  const px=x=>xOff+sx(x), py=y=>yOff+sx(y);
+  const nameSz=Math.max(16,Math.min(26,Math.round(26*scale)));
+  const typeSz=Math.max(12,Math.min(20,Math.round(20*scale)));
+  const F=`<w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/>`;
+  const lineClr='4472C4';
+  let z=8000, runs='';
+
+  function anchorWrap(x,y,w,h,inner,name){
+    const zi=z++;
+    return `<w:r><w:drawing>`+
+      `<wp:anchor xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="${zi}" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">`+
+      `<wp:simplePos x="0" y="0"/>`+
+      `<wp:positionH relativeFrom="page"><wp:posOffset>${x}</wp:posOffset></wp:positionH>`+
+      `<wp:positionV relativeFrom="page"><wp:posOffset>${y}</wp:posOffset></wp:positionV>`+
+      `<wp:extent cx="${w}" cy="${h}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/>`+
+      `<wp:docPr id="${zi}" name="${name}${zi}"/><wp:cNvGraphicFramePr/>`+
+      `<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">`+
+      `<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">`+
+      `<wps:wsp xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">`+
+      `<wps:cNvPr id="${zi}" name="${name}${zi}"/>${inner}`+
+      `</wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>`;
+  }
+  function lineAnchor(x1,y1,x2,y2){
+    const x=Math.min(x1,x2), y=Math.min(y1,y2), w=Math.max(Math.abs(x2-x1),1), h=Math.max(Math.abs(y2-y1),1);
+    return anchorWrap(x,y,w,h,
+      `<wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${w}" cy="${h}"/></a:xfrm>`+
+      `<a:prstGeom prst="line"><a:avLst/></a:prstGeom>`+
+      `<a:ln w="12700"><a:solidFill><a:srgbClr val="${lineClr}"/></a:solidFill></a:ln></wps:spPr>`+
+      `<wps:bodyPr/>`, 'ln');
+  }
+  function boxAnchor(n){
+    const c=orgFill(n.type), w=sx(L.boxW), h=sx(L.boxH);
+    const txt=`<wps:txbx><w:txbxContent>`+
+      `<w:p><w:pPr><w:bidi/><w:spacing w:after="0" w:line="240" w:lineRule="auto"/><w:jc w:val="center"/></w:pPr>`+
+        `<w:r><w:rPr>${F}<w:b/><w:bCs/><w:sz w:val="${nameSz}"/><w:szCs w:val="${nameSz}"/><w:color w:val="000000"/></w:rPr><w:t xml:space="preserve">${escXml(n.pos)}</w:t></w:r></w:p>`+
+      `<w:p><w:pPr><w:bidi/><w:spacing w:after="0" w:line="240" w:lineRule="auto"/><w:jc w:val="center"/></w:pPr>`+
+        `<w:r><w:rPr>${F}<w:sz w:val="${typeSz}"/><w:szCs w:val="${typeSz}"/><w:color w:val="000000"/></w:rPr><w:t xml:space="preserve">(${escXml(n.type)})</w:t></w:r></w:p>`+
+      `</w:txbxContent></wps:txbx>`;
+    return anchorWrap(px(n.x),py(n.y),w,h,
+      `<wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${w}" cy="${h}"/></a:xfrm>`+
+      `<a:prstGeom prst="roundRect"><a:avLst/></a:prstGeom>`+
+      `<a:solidFill><a:srgbClr val="${c.fill}"/></a:solidFill>`+
+      `<a:ln w="12700"><a:solidFill><a:srgbClr val="${c.line}"/></a:solidFill></a:ln></wps:spPr>`+
+      txt+
+      `<wps:bodyPr rot="0" wrap="square" lIns="18000" tIns="9000" rIns="18000" bIns="9000" anchor="ctr" anchorCtr="0"><a:noAutofit/></wps:bodyPr>`, 'box');
+  }
+
+  // connectors first (lower z), then boxes (higher z, drawn on top)
+  L.all.forEach(n=>{
+    if(!n.children.length) return;
+    const pcx=px(n.x+L.boxW/2), pbot=py(n.y+L.boxH), busY=py(n.y+L.boxH+L.vGap/2);
+    runs+=lineAnchor(pcx,pbot,pcx,busY);
+    const cxs=n.children.map(c=>px(c.x+L.boxW/2));
+    runs+=lineAnchor(Math.min(pcx,...cxs),busY,Math.max(pcx,...cxs),busY);
+    n.children.forEach(c=>{const ccx=px(c.x+L.boxW/2); runs+=lineAnchor(ccx,busY,ccx,py(c.y));});
+  });
+  L.all.forEach(n=>{ runs+=boxAnchor(n); });
+
+  return `<w:p><w:pPr><w:spacing w:after="0"/></w:pPr>${runs}</w:p>`;
+}
+
+// replace the [[ORGCHART]] marker paragraph — real SmartArt first, anchored shapes as fallback
+async function injectOrgChart(buffer, hrRows){
+  const {persons}=buildPersons(hrRows);
+  if(!persons.length) return buffer;
+  if(SMARTART_OK){
+    try{
+      const out = await injectWordSmartArt(buffer, hrRows);
+      if(out) return out;
+    }catch(e){ console.error('⚠️ SmartArt(Word) فشل — عودة لرسم الأشكال:', e && (e.message||e)); }
+  }
+  const para=buildOrgChartParagraphXml(hrRows);
+  if(!para) return buffer;
+  const zip=await JSZip.loadAsync(buffer);
+  let xml=await zip.file('word/document.xml').async('string');
+  xml=xml.replace(/<w:p\b[^>]*>(?:(?!<\/w:p>).)*?\[\[ORGCHART\]\](?:(?!<\/w:p>).)*?<\/w:p>/s, para);
+  zip.file('word/document.xml', xml);
+  return zip.generateAsync({type:'nodebuffer', compression:'DEFLATE'});
+}
+
+// ════════════════════════════════════════════════════════════
+//  Real SmartArt — Organisation Chart (orgChart1)
+//  layout/quickStyle/colors = أجزاء Office أصلية من assets/diagrams
+//  data1.xml  = شجرة الموظفين (لون كل عقدة حسب النوع)
+//  drawing1.xml = رسم مخبّأ بإحداثيات orgLayout (يضمن العرض في كل البرامج)
+// ════════════════════════════════════════════════════════════
+const NS_DGM='http://schemas.openxmlformats.org/drawingml/2006/diagram';
+const NS_A  ='http://schemas.openxmlformats.org/drawingml/2006/main';
+const NS_DSP='http://schemas.microsoft.com/office/drawing/2008/diagram';
+const NS_R  ='http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const REL_DGM_BASE='http://schemas.openxmlformats.org/officeDocument/2006/relationships/';
+const REL_DGM_DRAW='http://schemas.microsoft.com/office/2007/relationships/diagramDrawing';
+const CT_DGM={
+  data :'application/vnd.openxmlformats-officedocument.drawingml.diagramData+xml',
+  lo   :'application/vnd.openxmlformats-officedocument.drawingml.diagramLayout+xml',
+  qs   :'application/vnd.openxmlformats-officedocument.drawingml.diagramStyle+xml',
+  cs   :'application/vnd.openxmlformats-officedocument.drawingml.diagramColors+xml',
+  draw :'application/vnd.ms-office.drawingml.diagramDrawing+xml',
+};
+
+// يبني data1.xml و drawing1.xml لمخطط SmartArt بقياس frameW×frameH (EMU)
+function buildOrgSmartArt(hrRows, frameW, frameH, drawingRelId){
+  const L=orgLayout(hrRows); if(!L) return null;
+  const scale=Math.min(frameW/L.W, frameH/L.H);
+  const sx=v=>Math.round(v*scale);
+  const xOff=Math.max(0,Math.round((frameW-L.W*scale)/2));
+  const yOff=Math.max(0,Math.round((frameH-L.H*scale)/2));
+  const bw=sx(L.boxW), bh=sx(L.boxH);
+  const px=n=>xOff+sx(n.x), py=n=>yOff+sx(n.y);
+  const nameSz=Math.max(900,Math.min(1400,Math.round(1300*Math.min(scale,1.2))));
+  const typeSz=Math.max(800,Math.min(1100,Math.round(1050*Math.min(scale,1.2))));
+  const lineClr='4472C4';
+
+  // نص العقدة (سطران: المنصب + النوع) — يُستخدم في data و drawing معاً
+  const paras=n=>
+    `<a:p><a:pPr algn="ctr" rtl="1"/><a:r><a:rPr lang="ar-SA" sz="${nameSz}" b="1"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:latin typeface="${FONT}"/><a:cs typeface="${FONT}"/></a:rPr><a:t>${escXml(n.pos)}</a:t></a:r></a:p>`+
+    `<a:p><a:pPr algn="ctr" rtl="1"/><a:r><a:rPr lang="ar-SA" sz="${typeSz}"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:latin typeface="${FONT}"/><a:cs typeface="${FONT}"/></a:rPr><a:t>(${escXml(n.type)})</a:t></a:r></a:p>`;
+
+  // ── data model ──
+  const docId=gid();
+  const pts=[], cxns=[], edges=[];
+  pts.push(`<dgm:pt modelId="${docId}" type="doc"><dgm:prSet loTypeId="urn:microsoft.com/office/officeart/2005/8/layout/orgChart1" loCatId="hierarchy" qsTypeId="urn:microsoft.com/office/officeart/2005/8/quickstyle/simple1" qsCatId="simple" csTypeId="urn:microsoft.com/office/officeart/2005/8/colors/accent1_2" csCatId="accent1" phldr="0"/><dgm:spPr/><dgm:t><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="ar-SA"/></a:p></dgm:t></dgm:pt>`);
+  L.all.forEach(n=>{
+    const c=orgFill(n.type);
+    pts.push(`<dgm:pt modelId="${n.id}"><dgm:prSet/><dgm:spPr><a:solidFill><a:srgbClr val="${c.fill}"/></a:solidFill><a:ln w="12700"><a:solidFill><a:srgbClr val="${c.line}"/></a:solidFill></a:ln></dgm:spPr><dgm:t><a:bodyPr/><a:lstStyle/>${paras(n)}</dgm:t></dgm:pt>`);
+  });
+  const ordBySrc={};
+  function link(srcId, node, isRoot){
+    const cxnId=gid(), parT=gid(), sibT=gid();
+    const ord=ordBySrc[srcId]=(ordBySrc[srcId]===undefined?0:ordBySrc[srcId]+1);
+    pts.push(`<dgm:pt modelId="${parT}" type="parTrans" cxnId="${cxnId}"><dgm:prSet/><dgm:spPr/><dgm:t><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="ar-SA"/></a:p></dgm:t></dgm:pt>`);
+    pts.push(`<dgm:pt modelId="${sibT}" type="sibTrans" cxnId="${cxnId}"><dgm:prSet/><dgm:spPr/><dgm:t><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="ar-SA"/></a:p></dgm:t></dgm:pt>`);
+    cxns.push(`<dgm:cxn modelId="${cxnId}" srcId="${srcId}" destId="${node.id}" srcOrd="${ord}" destOrd="0" parTransId="${parT}" sibTransId="${sibT}"/>`);
+    if(!isRoot) edges.push({parentId:srcId, node, parT});
+  }
+  const byId={}; L.all.forEach(n=>byId[n.id]=n);
+  (function walk(nodes, parentId){
+    nodes.forEach(n=>{ link(parentId, n, parentId===docId); walk(n.children, n.id); });
+  })(L.all.filter(n=>n.depth===0), docId);
+
+  const extLst = drawingRelId
+    ? `<dgm:extLst><a:ext uri="${NS_DSP}"><dsp:dataModelExt xmlns:dsp="${NS_DSP}" relId="${drawingRelId}" minVer="${NS_DGM}"/></a:ext></dgm:extLst>`
+    : '';
+  const dataXml=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<dgm:dataModel xmlns:dgm="${NS_DGM}" xmlns:a="${NS_A}"><dgm:ptLst>${pts.join('')}</dgm:ptLst><dgm:cxnLst>${cxns.join('')}</dgm:cxnLst><dgm:bg/><dgm:whole/>${extLst}</dgm:dataModel>`;
+
+  // ── cached drawing (dsp) ──
+  const style=`<dsp:style><a:lnRef idx="2"><a:scrgbClr r="0" g="0" b="0"/></a:lnRef><a:fillRef idx="1"><a:scrgbClr r="0" g="0" b="0"/></a:fillRef><a:effectRef idx="0"><a:scrgbClr r="0" g="0" b="0"/></a:effectRef><a:fontRef idx="minor"/></dsp:style>`;
+  const shapes=[];
+  edges.forEach(({parentId,node,parT})=>{
+    const p=byId[parentId]; if(!p) return;
+    const pcx=px(p)+Math.round(bw/2), ccx=px(node)+Math.round(bw/2);
+    const pbot=py(p)+bh, ctop=py(node);
+    const busY=yOff+sx(p.y+L.boxH+L.vGap/2);
+    const x0=Math.min(pcx,ccx), w=Math.max(1,Math.abs(ccx-pcx)), y0=pbot, h=Math.max(1,ctop-pbot);
+    const rx=v=>v-x0, ry=v=>v-y0;
+    shapes.push(`<dsp:sp modelId="${parT}"><dsp:nvSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvSpPr/></dsp:nvSpPr><dsp:spPr><a:xfrm><a:off x="${x0}" y="${y0}"/><a:ext cx="${w}" cy="${h}"/></a:xfrm><a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="0" b="0"/><a:pathLst><a:path><a:moveTo><a:pt x="${rx(pcx)}" y="0"/></a:moveTo><a:lnTo><a:pt x="${rx(pcx)}" y="${ry(busY)}"/></a:lnTo><a:lnTo><a:pt x="${rx(ccx)}" y="${ry(busY)}"/></a:lnTo><a:lnTo><a:pt x="${rx(ccx)}" y="${h}"/></a:lnTo></a:path></a:pathLst></a:custGeom><a:noFill/><a:ln w="12700" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:srgbClr val="${lineClr}"/></a:solidFill><a:prstDash val="solid"/><a:miter lim="800000"/></a:ln></dsp:spPr>${style}</dsp:sp>`);
+  });
+  L.all.forEach(n=>{
+    const c=orgFill(n.type);
+    shapes.push(`<dsp:sp modelId="${n.id}"><dsp:nvSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvSpPr/></dsp:nvSpPr><dsp:spPr><a:xfrm><a:off x="${px(n)}" y="${py(n)}"/><a:ext cx="${bw}" cy="${bh}"/></a:xfrm><a:prstGeom prst="roundRect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="${c.fill}"/></a:solidFill><a:ln w="12700"><a:solidFill><a:srgbClr val="${c.line}"/></a:solidFill></a:ln></dsp:spPr>${style}<dsp:txBody><a:bodyPr spcFirstLastPara="0" vert="horz" wrap="square" lIns="18000" tIns="9000" rIns="18000" bIns="9000" numCol="1" spcCol="1270" anchor="ctr" anchorCtr="0"><a:noAutofit/></a:bodyPr><a:lstStyle/>${paras(n)}</dsp:txBody><dsp:txXfrm><a:off x="${px(n)}" y="${py(n)}"/><a:ext cx="${bw}" cy="${bh}"/></dsp:txXfrm></dsp:sp>`);
+  });
+  const drawingXml=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<dsp:drawing xmlns:dgm="${NS_DGM}" xmlns:dsp="${NS_DSP}" xmlns:a="${NS_A}"><dsp:spTree><dsp:nvGrpSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/>${shapes.join('')}</dsp:spTree></dsp:drawing>`;
+
+  return {dataXml, drawingXml};
+}
+
+// SmartArt في Word: إضافة الأجزاء + استبدال [[ORGCHART]] برسم dgm:relIds
+async function injectWordSmartArt(buffer, hrRows){
+  const zip=await JSZip.loadAsync(buffer);
+  let xml=await zip.file('word/document.xml').async('string');
+  if(!xml.includes('[[ORGCHART]]')) return null;
+  const L=orgLayout(hrRows); if(!L) return null;
+  const sc=Math.min(9770000/L.W, 5100000/L.H, 1.5);
+  const W=Math.max(1,Math.round(L.W*sc)), H=Math.max(1,Math.round(L.H*sc));
+  // بلا رسم مخبّأ — Word يعيد حساب التخطيط من data1+layout1 (أقل عرضة للأخطاء)
+  const art=buildOrgSmartArt(hrRows, W, H, null);
+  if(!art) return null;
+
+  zip.file('word/diagrams/data1.xml', art.dataXml);
+  zip.file('word/diagrams/layout1.xml', DGM_LAYOUT_XML);
+  zip.file('word/diagrams/quickStyle1.xml', DGM_QS_XML);
+  zip.file('word/diagrams/colors1.xml', DGM_COLORS_XML);
+
+  const relsPath='word/_rels/document.xml.rels';
+  let rels=await zip.file(relsPath).async('string');
+  rels=rels.replace('</Relationships>',
+    `<Relationship Id="rIdOrgDm1" Type="${REL_DGM_BASE}diagramData" Target="diagrams/data1.xml"/>`+
+    `<Relationship Id="rIdOrgLo1" Type="${REL_DGM_BASE}diagramLayout" Target="diagrams/layout1.xml"/>`+
+    `<Relationship Id="rIdOrgQs1" Type="${REL_DGM_BASE}diagramQuickStyle" Target="diagrams/quickStyle1.xml"/>`+
+    `<Relationship Id="rIdOrgCs1" Type="${REL_DGM_BASE}diagramColors" Target="diagrams/colors1.xml"/>`+
+    `</Relationships>`);
+  zip.file(relsPath, rels);
+
+  let ct=await zip.file('[Content_Types].xml').async('string');
+  const addCT=(pn,type)=>{ if(!ct.includes(`PartName="${pn}"`)) ct=ct.replace('</Types>',`<Override PartName="${pn}" ContentType="${type}"/></Types>`); };
+  addCT('/word/diagrams/data1.xml',CT_DGM.data);
+  addCT('/word/diagrams/layout1.xml',CT_DGM.lo);
+  addCT('/word/diagrams/quickStyle1.xml',CT_DGM.qs);
+  addCT('/word/diagrams/colors1.xml',CT_DGM.cs);
+  zip.file('[Content_Types].xml', ct);
+
+  const para=`<w:p><w:pPr><w:spacing w:after="0"/><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:noProof/></w:rPr><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${W}" cy="${H}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="9001" name="OrgChart"/><wp:cNvGraphicFramePr/><a:graphic xmlns:a="${NS_A}"><a:graphicData uri="${NS_DGM}"><dgm:relIds xmlns:dgm="${NS_DGM}" xmlns:r="${NS_R}" r:dm="rIdOrgDm1" r:lo="rIdOrgLo1" r:qs="rIdOrgQs1" r:cs="rIdOrgCs1"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+  xml=xml.replace(/<w:p\b[^>]*>(?:(?!<\/w:p>).)*?\[\[ORGCHART\]\](?:(?!<\/w:p>).)*?<\/w:p>/s, para);
+  zip.file('word/document.xml', xml);
+  return zip.generateAsync({type:'nodebuffer', compression:'DEFLATE'});
+}
+
+function escXml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function paybackPhrase(years){
+  if(!isFinite(years) || years<=0) return '—';
+  const total=Math.ceil(years*12); const y=Math.floor(total/12), m=total%12;
+  const yw = y===0?'':(y+(y===1?' سنة':(y<=10?' سنوات':' سنة')));
+  const mw = m===0?'':(m+(m===1?' شهر':(m<=10?' أشهر':' شهر')));
+  if(!yw && !mw) return '\u200Fأقل من شهر';
+  const out = (yw&&mw)?(yw+' و'+mw):(yw||mw);
+  return '\u200F'+out;
+}
+// ── Excel org chart: real drawing shapes injected into the HR sheet ──
+// Each shape is anchored to the actual column under its position (screen-from-right),
+// avoiding the RTL offset-clamping that piles shapes at the right edge in Excel.
+function buildExcelOrgDrawingXml(hrRows, top0){
+  const L=orgLayout(hrRows); if(!L) return null;
+  const targetW=7000000;
+  const scale=Math.min(1, targetW/L.W);
+  const sx=v=>Math.round(v*scale);
+  const bw=sx(L.boxW), bh=sx(L.boxH);
+  const colChars=[6,20,16,18,18,15,9,20];
+  const wEmu=i=>{ const ch=i<colChars.length?colChars[i]:8.43; return Math.round((ch*7+5)*9525); };
+  // توسيط الهيكل أفقياً على عرض جدول الموارد البشرية (الأعمدة A..H)
+  const tableW=colChars.reduce((a,ch)=>a+Math.round((ch*7+5)*9525),0);
+  const chartW=Math.round(L.W*scale);
+  const xOff=Math.max(0,Math.round((tableW-chartW)/2));
+  function sfr(emu){ let c=0, acc=0; while(c<400){ const w=wEmu(c); if(acc+w>emu) return {col:c, off:Math.max(0,Math.round(emu-acc))}; acc+=w; c++; } return {col:c, off:0}; }
+  const RH=266700;   // default row height (21pt) in EMU — يطابق defaultRowHeight بعد تكبير الخطوط
+  function srow(y){ let r=top0, acc=0; while(acc+RH<=y && r<top0+800){ acc+=RH; r++; } return {row:r, off:Math.max(0,Math.round(y-acc))}; }
+  const lineClr='4472C4'; let id=1;
+  function place(xR,yT,w,h,inner){
+    const f=sfr(xR+xOff), t=sfr(xR+xOff+w), fr=srow(yT), tr=srow(yT+h);
+    return `<xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>${f.col}</xdr:col><xdr:colOff>${f.off}</xdr:colOff><xdr:row>${fr.row}</xdr:row><xdr:rowOff>${fr.off}</xdr:rowOff></xdr:from><xdr:to><xdr:col>${t.col}</xdr:col><xdr:colOff>${t.off}</xdr:colOff><xdr:row>${tr.row}</xdr:row><xdr:rowOff>${tr.off}</xdr:rowOff></xdr:to>${inner}<xdr:clientData/></xdr:twoCellAnchor>`;
+  }
+  const rectLine=(xR,yT,w,h)=>{ const i=++id; w=Math.max(w,9525); h=Math.max(h,9525);
+    return place(xR,yT,w,h,`<xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="${i}" name="ln${i}"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${Math.round(w)}" cy="${Math.round(h)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="${lineClr}"/></a:solidFill><a:ln><a:noFill/></a:ln></xdr:spPr><xdr:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="ar-SA"/></a:p></xdr:txBody></xdr:sp>`); };
+  const box=(n)=>{ const i=++id; const c=orgFill(n.type);
+    const nameSz=Math.max(900,Math.min(1300,Math.round(1300*scale))), typeSz=Math.max(800,Math.min(1050,Math.round(1050*scale)));
+    const body=`<xdr:txBody><a:bodyPr rot="0" wrap="square" lIns="18000" tIns="9000" rIns="18000" bIns="9000" anchor="ctr"><a:noAutofit/></a:bodyPr><a:lstStyle/>`+
+      `<a:p><a:pPr algn="ctr" rtl="1"/><a:r><a:rPr lang="ar-SA" sz="${nameSz}" b="1"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:latin typeface="${FONT}"/><a:cs typeface="${FONT}"/></a:rPr><a:t>${escXml(n.pos)}</a:t></a:r></a:p>`+
+      `<a:p><a:pPr algn="ctr" rtl="1"/><a:r><a:rPr lang="ar-SA" sz="${typeSz}"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:latin typeface="${FONT}"/><a:cs typeface="${FONT}"/></a:rPr><a:t>(${escXml(n.type)})</a:t></a:r></a:p>`+
+      `</xdr:txBody>`;
+    return place(sx(n.x), sx(n.y), bw, bh,`<xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="${i}" name="box${i}"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${bw}" cy="${bh}"/></a:xfrm><a:prstGeom prst="roundRect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="${c.fill}"/></a:solidFill><a:ln w="12700"><a:solidFill><a:srgbClr val="${c.line}"/></a:solidFill></a:ln></xdr:spPr>${body}</xdr:sp>`); };
+  const parts=[];
+  L.all.forEach(n=>{ if(!n.children.length) return;
+    const pc=sx(n.x+L.boxW/2), pbot=sx(n.y+L.boxH), busY=sx(n.y+L.boxH+L.vGap/2);
+    parts.push(rectLine(pc-6350, pbot, 12700, busY-pbot));
+    const cxs=n.children.map(ch=>sx(ch.x+L.boxW/2)); const xa=Math.min(pc,...cxs), xb=Math.max(pc,...cxs);
+    parts.push(rectLine(xa, busY-6350, xb-xa, 12700));
+    n.children.forEach(ch=>{ const cc=sx(ch.x+L.boxW/2); parts.push(rectLine(cc-6350, busY, 12700, sx(ch.y)-busY)); });
+  });
+  L.all.forEach(n=>parts.push(box(n)));
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${parts.join('')}</xdr:wsDr>`;
+}
+// SmartArt حقيقي داخل ورقة Excel (graphicFrame + أجزاء diagram + رسم مخبّأ)
+// يُثبَّت أسفل جدول الموارد البشرية. عند أي فشل → نعود لرسم الأشكال.
+async function injectExcelSmartArt(buffer, hrRows){
+  const {persons}=buildPersons(hrRows); if(!persons.length) return null;
+  const L=orgLayout(hrRows); if(!L) return null;
+  const top0=(hrRows||[]).length+5;
+  // إطار المخطط بقياس EMU وبتوسيط أفقي على عرض جدول HR (الأعمدة A..H)
+  const colChars=[6,20,16,18,18,15,9,20];
+  const wEmu=i=>{ const ch=i<colChars.length?colChars[i]:8.43; return Math.round((ch*7+5)*9525); };
+  const tableW=colChars.reduce((a,_,i)=>a+wEmu(i),0);
+  const sc=Math.min(tableW/L.W, 1.4);
+  const W=Math.max(1,Math.round(L.W*sc)), H=Math.max(1,Math.round(L.H*sc));
+  // بلا رسم مخبّأ — Excel يعيد حساب التخطيط من data1+layout1 (كما يفعل Word)
+  const art=buildOrgSmartArt(hrRows, W, H, null);
+  if(!art) return null;
+
+  const zip=await JSZip.loadAsync(buffer);
+  const wbXml=await zip.file('xl/workbook.xml').async('string');
+  const relsXml=await zip.file('xl/_rels/workbook.xml.rels').async('string');
+  const m=wbXml.match(/<sheet[^>]*name="الموارد البشرية"[^>]*r:id="([^"]+)"/);
+  if(!m) return null;
+  const rm=relsXml.match(new RegExp('<Relationship[^>]*Id="'+m[1]+'"[^>]*Target="([^"]+)"'));
+  if(!rm) return null;
+  const baseName=rm[1].split('/').pop();
+  const sheetFile='xl/worksheets/'+baseName;
+
+  // أجزاء diagram (data + الأجزاء الأصلية + الرسم المخبّأ)
+  zip.file('xl/diagrams/data1.xml', art.dataXml);
+  zip.file('xl/diagrams/layout1.xml', DGM_LAYOUT_XML);
+  zip.file('xl/diagrams/quickStyle1.xml', DGM_QS_XML);
+  zip.file('xl/diagrams/colors1.xml', DGM_COLORS_XML);
+
+  // رسم الورقة: graphicFrame مرساة بخليّتين — مطابق لما يُنتجه Excel (ext=0,0)
+  const xOff=Math.max(0,Math.round((tableW-W)/2));
+  const RH=266700;
+  const sfr=emu=>{ let c=0,acc=0; while(c<400){ const w=wEmu(c); if(acc+w>emu) return {col:c,off:Math.max(0,Math.round(emu-acc))}; acc+=w; c++; } return {col:c,off:0}; };
+  const srow=y=>{ let r=top0,acc=0; while(acc+RH<=y && r<top0+800){ acc+=RH; r++; } return {row:r,off:Math.max(0,Math.round(y-acc))}; };
+  const f=sfr(xOff), t=sfr(xOff+W), fr=srow(0), tr=srow(H);
+  const frameXml=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n`+
+    `<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="${NS_A}">`+
+    `<xdr:twoCellAnchor><xdr:from><xdr:col>${f.col}</xdr:col><xdr:colOff>${f.off}</xdr:colOff><xdr:row>${fr.row}</xdr:row><xdr:rowOff>${fr.off}</xdr:rowOff></xdr:from>`+
+    `<xdr:to><xdr:col>${t.col}</xdr:col><xdr:colOff>${t.off}</xdr:colOff><xdr:row>${tr.row}</xdr:row><xdr:rowOff>${tr.off}</xdr:rowOff></xdr:to>`+
+    `<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Diagram 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>`+
+    `<xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm>`+
+    `<a:graphic><a:graphicData uri="${NS_DGM}"><dgm:relIds xmlns:dgm="${NS_DGM}" xmlns:r="${NS_R}" r:dm="rId1" r:lo="rId2" r:qs="rId3" r:cs="rId4"/></a:graphicData></a:graphic>`+
+    `<xdr:clientData/></xdr:graphicFrame></xdr:twoCellAnchor></xdr:wsDr>`;
+  const drawCount=Object.keys(zip.files).filter(f=>/^xl\/drawings\/drawing\d+\.xml$/.test(f)).length;
+  const drawName='drawing'+(drawCount+1)+'.xml';
+  zip.file('xl/drawings/'+drawName, frameXml);
+
+  // rels لجزء الرسم: dm/lo/qs/cs + الرسم المخبّأ (rId5) — مطابق لمرجع Excel
+  zip.file('xl/drawings/_rels/'+drawName+'.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`+
+    `<Relationship Id="rId1" Type="${REL_DGM_BASE}diagramData" Target="../diagrams/data1.xml"/>`+
+    `<Relationship Id="rId2" Type="${REL_DGM_BASE}diagramLayout" Target="../diagrams/layout1.xml"/>`+
+    `<Relationship Id="rId3" Type="${REL_DGM_BASE}diagramQuickStyle" Target="../diagrams/quickStyle1.xml"/>`+
+    `<Relationship Id="rId4" Type="${REL_DGM_BASE}diagramColors" Target="../diagrams/colors1.xml"/>`+
+    `</Relationships>`);
+
+  // ربط الورقة بالرسم
+  const relPath='xl/worksheets/_rels/'+baseName+'.rels';
+  let sheetRels = zip.file(relPath) ? await zip.file(relPath).async('string')
+    : '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
+  const drawRelId='rIdOrgDraw'+(drawCount+1);
+  sheetRels=sheetRels.replace('</Relationships>', `<Relationship Id="${drawRelId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/${drawName}"/></Relationships>`);
+  zip.file(relPath, sheetRels);
+  let sxml=await zip.file(sheetFile).async('string');
+  if(!/<drawing /.test(sxml)) sxml=sxml.replace('</worksheet>', `<drawing r:id="${drawRelId}"/></worksheet>`);
+  zip.file(sheetFile, sxml);
+
+  // أنواع المحتوى
+  let ct=await zip.file('[Content_Types].xml').async('string');
+  const addCT=(pn,type)=>{ if(!ct.includes(`PartName="${pn}"`)) ct=ct.replace('</Types>',`<Override PartName="${pn}" ContentType="${type}"/></Types>`); };
+  addCT('/xl/drawings/'+drawName,'application/vnd.openxmlformats-officedocument.drawing+xml');
+  addCT('/xl/diagrams/data1.xml',CT_DGM.data);
+  addCT('/xl/diagrams/layout1.xml',CT_DGM.lo);
+  addCT('/xl/diagrams/quickStyle1.xml',CT_DGM.qs);
+  addCT('/xl/diagrams/colors1.xml',CT_DGM.cs);
+  zip.file('[Content_Types].xml', ct);
+
+  return zip.generateAsync({type:'nodebuffer', compression:'DEFLATE'});
+}
+
+async function injectExcelOrgChart(buffer, hrRows){
+  // ملاحظة: SmartArt حقيقي في Excel غير عملي — Excel (خلافاً لـ Word) لا يعيد حساب
+  // التخطيط ويتطلّب «رسماً مخبّأ» تتطابق مُعرّفاته مع عُقَد العرض (type="pres") التي
+  // يولّدها محرّك التخطيط؛ تأليفها يدوياً غير موثوق. لذا نستخدم رسم الأشكال (يطابق الشكل).
+  // (دالة injectExcelSmartArt محفوظة للرجوع إليها لكنها غير مُستدعاة.)
+  try{
+    const {persons}=buildPersons(hrRows); if(!persons.length) return buffer;
+    // يبدأ الهيكل تحت جدول الموارد البشرية: شريط(1) + رؤوس(3) + الصفوف + صف الإجمالي + صف فاصل
+    const top0=(hrRows||[]).length+5;
+    const drawing=buildExcelOrgDrawingXml(hrRows, top0); if(!drawing) return buffer;
+    const zip=await JSZip.loadAsync(buffer);
+    const wbXml=await zip.file('xl/workbook.xml').async('string');
+    const relsXml=await zip.file('xl/_rels/workbook.xml.rels').async('string');
+    const m=wbXml.match(/<sheet[^>]*name="الموارد البشرية"[^>]*r:id="([^"]+)"/);
+    if(!m) return buffer;
+    const rm=relsXml.match(new RegExp('<Relationship[^>]*Id="'+m[1]+'"[^>]*Target="([^"]+)"'));
+    if(!rm) return buffer;
+    const baseName=rm[1].split('/').pop();
+    const sheetFile='xl/worksheets/'+baseName;
+    const drawCount=Object.keys(zip.files).filter(f=>/^xl\/drawings\/drawing\d+\.xml$/.test(f)).length;
+    const drawName='drawing'+(drawCount+1)+'.xml';
+    zip.file('xl/drawings/'+drawName, drawing);
+    const relPath='xl/worksheets/_rels/'+baseName+'.rels';
+    let sheetRels = zip.file(relPath) ? await zip.file(relPath).async('string')
+      : '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
+    const drawRelId='rIdOrg'+(drawCount+1);
+    sheetRels=sheetRels.replace('</Relationships>', `<Relationship Id="${drawRelId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/${drawName}"/></Relationships>`);
+    zip.file(relPath, sheetRels);
+    let sxml=await zip.file(sheetFile).async('string');
+    if(!/<drawing /.test(sxml)) sxml=sxml.replace('</worksheet>', `<drawing r:id="${drawRelId}"/></worksheet>`);
+    zip.file(sheetFile, sxml);
+    let ct=await zip.file('[Content_Types].xml').async('string');
+    if(!ct.includes('/xl/drawings/'+drawName)){
+      ct=ct.replace('</Types>', `<Override PartName="/xl/drawings/${drawName}" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>`);
+      zip.file('[Content_Types].xml', ct);
+    }
+    return zip.generateAsync({type:'nodebuffer', compression:'DEFLATE'});
+  }catch(e){ return buffer; }
+}
+
+// ── financial dashboard (anchored shapes injected onto page 2) ──────
+const FW = { card:'F1F5F9', track:'E2E8F0', muted:'64748B', netLbl:'CDD9EE',
+  blue:'2F5496', orange:'ED7D31', navy:'1F3864', gray:'94A3B8', green:'63991F' };
+let _fwz = 7000;
+function fwAnchor(x,y,w,h,inner,name){
+  const z=_fwz++;
+  return `<w:r><w:drawing><wp:anchor xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="${z}" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="page"><wp:posOffset>${Math.round(x)}</wp:posOffset></wp:positionH><wp:positionV relativeFrom="page"><wp:posOffset>${Math.round(y)}</wp:posOffset></wp:positionV><wp:extent cx="${Math.round(w)}" cy="${Math.round(h)}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/><wp:docPr id="${z}" name="${name}${z}"/><wp:cNvGraphicFramePr/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:cNvPr id="${z}" name="${name}${z}"/>${inner}</wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>`;
+}
+function fwTxt(lines){
+  const ps=lines.map(l=>`<w:p><w:pPr><w:bidi/><w:spacing w:after="0" w:line="240" w:lineRule="auto"/><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/>${l.bold?'<w:b/><w:bCs/>':''}<w:sz w:val="${l.sz}"/><w:szCs w:val="${l.sz}"/><w:color w:val="${l.color}"/></w:rPr><w:t xml:space="preserve">${escXml(l.text)}</w:t></w:r></w:p>`).join('');
+  return `<wps:txbx><w:txbxContent>${ps}</w:txbxContent></wps:txbx><wps:bodyPr rot="0" wrap="square" lIns="36000" tIns="18000" rIns="36000" bIns="18000" anchor="ctr" anchorCtr="0"><a:noAutofit/></wps:bodyPr>`;
+}
+function fwRect(x,y,w,h,fill,lines,opts={}){
+  const hasLine = opts.line && opts.line!=='none';
+  const ln = hasLine ? `<a:ln w="${opts.lineW||9525}"><a:solidFill><a:srgbClr val="${opts.line}"/></a:solidFill></a:ln>` : `<a:ln><a:noFill/></a:ln>`;
+  const geom=opts.geom||'roundRect';
+  const av=geom==='roundRect'?`<a:avLst><a:gd name="adj" fmla="val ${opts.radius||12000}"/></a:avLst>`:'<a:avLst/>';
+  const fillXml = (fill==='none')?'<a:noFill/>':`<a:solidFill><a:srgbClr val="${fill}"/></a:solidFill>`;
+  return fwAnchor(x,y,w,h,`<wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${Math.round(w)}" cy="${Math.round(h)}"/></a:xfrm><a:prstGeom prst="${geom}">${av}</a:prstGeom>${fillXml}${ln}</wps:spPr>${lines?fwTxt(lines):'<wps:bodyPr/>'}`,'fw');
+}
+function fwRing(cx,cy,r,pct,color,label,valText){
+  const x=cx-r,y=cy-r,d=2*r;
+  const start=16200000, sweep=Math.max(0,Math.min(99.9,pct))/100*360, a2=Math.round((start+sweep*60000)%21600000);
+  const ell=(rr,fill)=>fwRect(cx-rr,cy-rr,2*rr,2*rr,fill,null,{geom:'ellipse'});
+  let out=ell(r,FW.track);                                   // track disc
+  if(sweep>0) out+=fwAnchor(x,y,d,d,`<wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${Math.round(d)}" cy="${Math.round(d)}"/></a:xfrm><a:prstGeom prst="pie"><a:avLst><a:gd name="adj1" fmla="val ${start}"/><a:gd name="adj2" fmla="val ${a2}"/></a:avLst></a:prstGeom><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:ln><a:noFill/></a:ln></wps:spPr><wps:bodyPr/>`,'arc');
+  out+=ell(r*0.60,'FFFFFF');                                 // hole
+  out+=fwAnchor(x,cy-330000,d,660000,`<wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${Math.round(d)}" cy="660000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></wps:spPr>${fwTxt([{text:valText,sz:30,bold:true,color:FW.navy},{text:label,sz:17,bold:false,color:FW.muted}])}`,'rt');
+  return out;
+}
+function fwBar(x,y,w,h,pct,color){
+  let out=fwRect(x,y,w,h,'EEF2F7',null,{geom:'roundRect',radius:50000});
+  const fw=Math.max(0,Math.min(100,pct))/100*w;
+  if(fw>3000) out+=fwRect(x,y,fw,h,color,null,{geom:'roundRect',radius:50000});
+  return out;
+}
+function buildFinanceDashXml(summary){
+  summary=summary||{};
+  const pm=s=>parseFloat(String(s||'0').replace(/[^0-9.-]/g,''))||0;
+  const rv=pm(summary.revenueAnnual), opsA=pm(summary.opsAnnual), fxA=pm(summary.fixedAnnual),
+        ft=pm(summary.foundingTotal), net=pm(summary.netProfit), dep=pm(summary.depreciation);
+  const f1=x=>{const r=Math.round(x*10)/10;return Number.isInteger(r)?String(r):r.toFixed(1);};
+  const payback=(net>0&&ft>0)?paybackPhrase(ft/net):'—';
+  const margin=rv>0?net/rv*100:0, roi=ft>0?net/ft*100:0;
+  const costs=opsA+fxA+dep, costsPct=rv>0?costs/rv*100:0, profitPct=rv>0?net/rv*100:0;
+  const PW=16838*635, MX=600000, CW=PW-2*MX, gap=150000;
+  _fwz=7000; let s='';
+  // 1) KPI cards (top نازل تحت سطر عدد الموظفين، والمجموع مضغوط كي لا يلامس فوتر الترويسة)
+  const cw=(CW-4*gap)/5, ch=1020000, top=1600000;
+  const cards=[['الإيرادات السنوية',summary.revenueAnnual||'$0'],['التكاليف التشغيلية',summary.opsAnnual||'$0'],
+               ['التكاليف الثابتة',summary.fixedAnnual||'$0'],['الاهتلاك السنوي',summary.depreciation||'$0'],
+               ['التكاليف التأسيسية',summary.foundingTotal||'$0']];
+  cards.forEach((c,i)=>{ s+=fwRect(MX+i*(cw+gap),top,cw,ch,FW.card,[{text:c[0],sz:22,bold:false,color:FW.muted},{text:c[1],sz:32,bold:true,color:FW.navy}],{radius:14000}); });
+  // 2) net profit wide card
+  const ny=top+ch+gap, nh=820000;
+  s+=fwRect(MX,ny,CW,nh,FW.navy,[{text:'صافي الربح السنوي',sz:24,bold:false,color:FW.netLbl},{text:summary.netProfit||'$0',sz:48,bold:true,color:FW.orange}],{radius:14000});
+  // 3) payback card + two donut gauges
+  const by=ny+nh+gap, bw=(CW-2*gap)/3, bh=1280000;
+  s+=fwRect(MX,by,bw,bh,FW.card,[{text:'فترة استرداد رأس المال',sz:24,bold:false,color:FW.muted},{text:payback,sz:34,bold:true,color:FW.navy}],{radius:14000});
+  s+=fwRect(MX+bw+gap,by,bw,bh,'FFFFFF',null,{line:FW.track,radius:14000});
+  s+=fwRing(MX+bw+gap+bw/2, by+bh/2, 560000, margin, FW.blue, 'هامش الربح', f1(margin)+'%');
+  s+=fwRect(MX+2*(bw+gap),by,bw,bh,'FFFFFF',null,{line:FW.track,radius:14000});
+  s+=fwRing(MX+2*(bw+gap)+bw/2, by+bh/2, 560000, roi, FW.orange, 'العائد على الاستثمار', f1(roi)+'%');
+  // 4) comparison bars (revenue / costs / profit) scaled to revenue
+  const cy0=by+bh+gap, rowH=300000, rowGap=120000, labW=CW*0.26, barX=MX+CW*0.30, barW=CW*0.66;
+  const rows=[['الإيرادات',100,FW.blue],['التكاليف',costsPct,FW.gray],['صافي الربح',profitPct,FW.green]];
+  rows.forEach((r,i)=>{ const yy=cy0+i*(rowH+rowGap);
+    s+=fwRect(MX,yy-30000,labW,rowH+60000,'none',[{text:r[0],sz:26,bold:false,color:FW.muted}]);
+    s+=fwBar(barX,yy,barW,rowH,r[1],r[2]); });
+  return `<w:p><w:pPr><w:spacing w:after="0"/></w:pPr>${s}</w:p>`;
+}
+async function injectFinance(buffer, summary){
+  try{
+    const para=buildFinanceDashXml(summary);
+    const zip=await JSZip.loadAsync(buffer);
+    let xml=await zip.file('word/document.xml').async('string');
+    if(!xml.includes('[[FINANCE]]')) return buffer;
+    xml=xml.replace(/<w:p\b[^>]*>(?:(?!<\/w:p>).)*?\[\[FINANCE\]\](?:(?!<\/w:p>).)*?<\/w:p>/s, para);
+    zip.file('word/document.xml', xml);
+    return zip.generateAsync({type:'nodebuffer', compression:'DEFLATE'});
+  }catch(_){ return buffer; }
+}
+
+
+// ════════════════════════════════════════════════════════════
+//  EMAIL SENDER
+// ════════════════════════════════════════════════════════════
+// ===== إرسال عبر Brevo HTTP API (يعمل حتى لو حجبت الاستضافة منافذ SMTP) =====
+// يقبل نفس شكل nodemailer ({to, cc, subject, html, attachments:[{filename,content}]})
+async function sendViaBrevo(mail){
+  const apiKey = process.env.BREVO_API_KEY;
+  if(!apiKey) throw new Error('BREVO_API_KEY غير مضبوط');
+  const senderEmail = process.env.SENDER_EMAIL || process.env.EMAIL_USER;
+  if(!senderEmail) throw new Error('SENDER_EMAIL غير مضبوط');
+  const body = {
+    sender: { name:'نظام دراسة المشاريع', email: senderEmail },
+    to: [{ email: mail.to }],
+    subject: mail.subject,
+    htmlContent: mail.html || ' ',
+  };
+  if(mail.cc) body.cc = String(mail.cc).split(',').map(e=>({email:e.trim()})).filter(x=>x.email);
+  if(mail.attachments && mail.attachments.length)
+    body.attachment = mail.attachments.map(a=>({ name:a.filename,
+      content: Buffer.isBuffer(a.content) ? a.content.toString('base64') : Buffer.from(a.content).toString('base64') }));
+  const r = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method:'POST',
+    headers:{ 'api-key':apiKey, 'content-type':'application/json', 'accept':'application/json' },
+    body: JSON.stringify(body),
+  });
+  const txt = await r.text();
+  if(!r.ok) throw new Error(`Brevo ${r.status}: ${txt}`);
+  return txt;
+}
+async function sendEmail(data, id, excelBuf, wordBuf) {
+  if (!process.env.BREVO_API_KEY) {
+    console.log('⚠️  BREVO_API_KEY غير مضبوط — تخطي الإرسال');
+    return;
+  }
+  const to = process.env.RECEIVER_EMAIL || process.env.SENDER_EMAIL || process.env.EMAIL_USER;
+  const cc = (process.env.CC_EMAIL || '').trim();
+  const projName = (data.projectTitle || data.projectIdea || 'مشروع').toString().substring(0,60);
+  const applicant = (data.applicantName || '—').toString().substring(0,40);
+  const base = fileBase(data);
+  await sendViaBrevo({
+    to,
+    ...(cc ? { cc } : {}),
+    subject: `📋 نموذج جديد — ${projName} — ${applicant}`,
+    html: `
+<div dir="rtl" style="font-family:Arial;max-width:620px;margin:auto;border:1px solid #ddd;border-radius:12px;overflow:hidden">
+  <div style="background:#1a3a5c;color:white;padding:20px 24px">
+    <h2 style="margin:0;font-size:18px">📋 نموذج طرح دراسة مشروع جديد</h2>
+    <p style="margin:6px 0 0;opacity:.75;font-size:13px">رقم الطلب: ${id}</p>
+  </div>
+  <div style="padding:20px 24px">
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <tr style="background:#eaf0f8"><td style="padding:10px;font-weight:bold">فكرة المشروع</td><td style="padding:10px">${data.projectIdea||''}</td></tr>
+      <tr><td style="padding:10px;font-weight:bold">اسم مقدم المشروع</td><td style="padding:10px">${data.applicantName||''}</td></tr>
+      <tr style="background:#eaf0f8"><td style="padding:10px;font-weight:bold">رقم الهاتف</td><td style="padding:10px">${data.applicantPhone||''}</td></tr>
+      <tr><td style="padding:10px;font-weight:bold">التكاليف التأسيسية</td><td style="padding:10px">${data.summary?.foundingTotal||'$0'}</td></tr>
+      <tr style="background:#eaf0f8"><td style="padding:10px;font-weight:bold">الإيرادات السنوية</td><td style="padding:10px">${data.summary?.revenueAnnual||'$0'}</td></tr>
+      <tr><td style="padding:10px;font-weight:bold">التكاليف التشغيلية السنوية</td><td style="padding:10px">${data.summary?.opsAnnual||'$0'}</td></tr>
+      <tr style="background:#eaf0f8"><td style="padding:10px;font-weight:bold">التكاليف الثابتة السنوية</td><td style="padding:10px">${data.summary?.fixedAnnual||'$0'}</td></tr>
+      <tr><td style="padding:10px;font-weight:bold">الاهتلاك السنوي</td><td style="padding:10px">${data.summary?.depreciation||'$0'}</td></tr>
+      <tr style="background:#1a3a5c;color:white"><td style="padding:10px;font-weight:bold">الربح الصافي السنوي</td><td style="padding:10px;font-weight:bold">${data.summary?.netProfit||'$0'}</td></tr>
+      <tr><td style="padding:10px;font-weight:bold">عدد الموظفين</td><td style="padding:10px">${data.summary?.employees||'0'}</td></tr>
+    </table>
+  </div>
+  <div style="background:#f5f7fa;padding:12px 24px;font-size:11px;color:#888;border-top:1px solid #eee">
+    تاريخ الإرسال: ${new Date().toLocaleString('ar-SA')} | مرفق: ملف Excel + ملف Word
+  </div>
+</div>`,
+    attachments:[
+      { filename:`${base}.xlsx`, content:excelBuf, contentType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+      { filename:`${base}.docx`, content:wordBuf,  contentType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+    ],
+  });
+  console.log(`📧 إيميل أُرسل: ${id} → ${to}`);
+}
+
+// ════════════════════════════════════════════════════════════
+//  ROUTES
+// ════════════════════════════════════════════════════════════
+// build a friendly download filename: "<applicant> - <date> - <serial>.docx"
+function fileBase(sub){
+  const name = String(sub.applicantName||'').trim() || 'مقدم المشروع';
+  const date = String(sub.submittedAt||new Date().toISOString()).slice(0,10); // YYYY-MM-DD
+  const serial = String(sub.serial||0).padStart(4,'0');
+  return `${name} - ${date} - ${serial}`.replace(/[\\\/:*?"<>|\r\n]/g,'_').trim();
+}
+
+app.post('/api/submit', async (req, res) => {
   try {
-    if (!store.enabled) return res.json({ ok: false, error: 'التخزين الدائم غير مفعّل' });
-    let reminders = await store.getAllReminders();
-    const scope = req.query.all === '1' ? null : (req.query.user ? String(req.query.user).toLowerCase() : String(req.session.user.email).toLowerCase());
-    if (scope) reminders = reminders.filter((r) => String(r.email).toLowerCase() === scope);
-    // خريطة الصف→المهمة عبر كل البروفايلات (نفس منطق نبضة الـ cron)
-    const profiles = await store.getProfiles();
-    const tasksByRow = {};
-    for (const p of profiles) {
-      try { const tasks = await loadTasks(p.tab, true); for (const t of tasks) if (!(String(t.row) in tasksByRow)) tasksByRow[String(t.row)] = t; }
-      catch (e) { console.warn('diag/reminders tab', p.tab, e.message); }
-    }
-    const analysis = await notify.analyzeReminders(tasksByRow, reminders, store);
-    res.json({ ok: true, scope: scope || 'كل المستخدمين', ...analysis });
-  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+    const body = req.body;
+    if (!body?.projectIdea) return res.status(400).json({ success:false, message:'فكرة المشروع مطلوبة' });
+
+    const id = genId();
+    const index = loadIndex();
+    const serial = index.reduce((m,s)=>Math.max(m, parseInt(s.serial)||0), 0) + 1;
+    const submission = { id, serial, submittedAt: body.submittedAt||new Date().toISOString(), ...body };
+    fs.writeFileSync(path.join(DATA_DIR,`${id}.json`), JSON.stringify(submission,null,2), 'utf8');
+    index.unshift({ id, serial, projectIdea:body.projectIdea.substring(0,80), applicantName:body.applicantName||'', submittedAt:submission.submittedAt, summary:body.summary||{} });
+    saveIndex(index);
+
+    // generate + save files (needed for the immediate download)
+    const [excelBuf, wordBuf] = await Promise.all([generateExcel(submission), generateWord(submission)]);
+    fs.writeFileSync(path.join(DATA_DIR,`${id}.xlsx`), excelBuf);
+    fs.writeFileSync(path.join(DATA_DIR,`${id}.docx`), wordBuf);
+
+    console.log(`✅ طلب جديد: ${id}`);
+    // respond NOW so the browser downloads instantly …
+    res.json({ success:true, id, fileName: fileBase(submission)+'.docx' });
+    // … then send the email in the background with clear logging
+    sendEmail(submission, id, excelBuf, wordBuf)
+      .then(() => console.log(`📧 تم إرسال الإيميل بنجاح: ${id}`))
+      .catch(e => console.error(`❌ فشل إرسال الإيميل (${id}):`, e && (e.message||e), 'code=', e && e.code));
+  } catch(err) {
+    console.error('❌', err);
+    if (!res.headersSent) return res.status(500).json({ success:false, message:err.message });
+  }
 });
 
-app.listen(PORT, async () => {
-  console.log(`EO-Dashboard يعمل على المنفذ ${PORT} (الكتابة: ${sheets.canWrite ? 'مفعّلة' : 'معطّلة - قراءة فقط'})`);
-  if (sheets.canWrite) {
-    try {
-      const profs = store.enabled ? await store.getProfiles() : [{ tab: DEFAULT_TAB }];
-      for (const p of profs) { try { await sheets.ensureColumns(p.tab); } catch (e) { console.warn('ensureColumns', p.tab, e.message); } }
-      console.log('تم التأكد من الأعمدة المُدارة لكل البروفايلات.');
-    } catch (e) {
-      console.warn('تعذّر إنشاء الأعمدة المُدارة:', e.message);
-    }
-  }
-  console.log(`التخزين الدائم (المستخدمون/التذكيرات): ${store.enabled ? 'مفعّل' : 'معطّل — USERS_JSON فقط'}`);
-  // تسجيل webhook تيليجرام تلقائياً (لاستقبال ربط الأرقام)
-  if (telegram.enabled && process.env.APP_URL) {
-    telegram.setWebhook(`${process.env.APP_URL.replace(/\/$/, '')}/api/telegram/webhook`, process.env.TELEGRAM_WEBHOOK_SECRET).catch((e) => console.warn('telegram webhook reg:', e.message));
+app.get('/api/submissions', (req, res) => res.json({ success:true, submissions:loadIndex() }));
+
+app.get('/api/submissions/:id', (req, res) => {
+  const sid = req.params.id.replace(/[^A-Z0-9\-]/g,'');
+  const fp = path.join(DATA_DIR,`${sid}.json`);
+  if (!fs.existsSync(fp)) return res.status(404).json({ success:false });
+  res.json({ success:true, submission:JSON.parse(fs.readFileSync(fp,'utf8')) });
+});
+
+app.get('/api/download/:id/excel', async (req, res) => {
+  const sid = req.params.id.replace(/[^A-Z0-9\-]/g,'');
+  const fp  = path.join(DATA_DIR, `${sid}.json`);
+  if (!fs.existsSync(fp)) return res.status(404).send('الطلب غير موجود');
+  try {
+    const data = JSON.parse(fs.readFileSync(fp,'utf8'));
+    const cached = path.join(DATA_DIR, `${sid}.xlsx`);
+    const buf = fs.existsSync(cached) ? fs.readFileSync(cached) : await generateExcel(data);
+    const fn = fileBase(data)+'.xlsx';
+    res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition',`attachment; filename="project_${sid}.xlsx"; filename*=UTF-8''${encodeURIComponent(fn)}`);
+    res.send(buf);
+  } catch(e) {
+    console.error('Excel gen error:', e.message);
+    res.status(500).send('خطأ في توليد الملف: ' + e.message);
   }
 });
+
+app.get('/api/download/:id/word', async (req, res) => {
+  const sid = req.params.id.replace(/[^A-Z0-9\-]/g,'');
+  const fp  = path.join(DATA_DIR, `${sid}.json`);
+  if (!fs.existsSync(fp)) return res.status(404).send('الطلب غير موجود');
+  try {
+    const data = JSON.parse(fs.readFileSync(fp,'utf8'));
+    const cached = path.join(DATA_DIR, `${sid}.docx`);
+    const buf = fs.existsSync(cached) ? fs.readFileSync(cached) : await generateWord(data);
+    const fn = fileBase(data)+'.docx';
+    res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition',`attachment; filename="project_${sid}.docx"; filename*=UTF-8''${encodeURIComponent(fn)}`);
+    res.send(buf);
+  } catch(e) {
+    console.error('Word gen error:', e.message);
+    res.status(500).send('خطأ في توليد الملف: ' + e.message);
+  }
+});
+
+// PATCH /api/submissions/:id/update — update basic fields and regenerate files
+app.patch('/api/submissions/:id/update', async (req, res) => {
+  try {
+    const sid = req.params.id.replace(/[^A-Z0-9\-]/g,'');
+    const fp  = path.join(DATA_DIR, `${sid}.json`);
+    if (!fs.existsSync(fp)) return res.status(404).json({ success:false, message:'الطلب غير موجود' });
+
+    const submission = JSON.parse(fs.readFileSync(fp,'utf8'));
+    const { projectIdea, applicantName, applicantPhone } = req.body;
+
+    // Update fields
+    if (projectIdea)   submission.projectIdea   = projectIdea;
+    if (applicantName !== undefined)  submission.applicantName  = applicantName;
+    if (applicantPhone !== undefined) submission.applicantPhone = applicantPhone;
+
+    // Save updated JSON
+    fs.writeFileSync(fp, JSON.stringify(submission, null, 2), 'utf8');
+
+    // Update index entry
+    const index = loadIndex();
+    const idx = index.findIndex(s=>s.id===sid);
+    if (idx>=0) index[idx].projectIdea = submission.projectIdea.substring(0,80);
+    saveIndex(index);
+
+    // Regenerate Excel and Word files
+    const [excelBuf, wordBuf] = await Promise.all([generateExcel(submission), generateWord(submission)]);
+    fs.writeFileSync(path.join(DATA_DIR,`${sid}.xlsx`), excelBuf);
+    fs.writeFileSync(path.join(DATA_DIR,`${sid}.docx`), wordBuf);
+
+    return res.json({ success:true });
+  } catch(err) {
+    console.error('PATCH error:', err);
+    return res.status(500).json({ success:false, message: err.message });
+  }
+});
+
+app.delete('/api/submissions/:id', (req, res) => {
+  const sid = req.params.id.replace(/[^A-Z0-9\-]/g,'');
+  ['json','xlsx','docx'].forEach(ext => {
+    const fp = path.join(DATA_DIR,`${sid}.${ext}`);
+    if(fs.existsSync(fp)) fs.unlinkSync(fp);
+  });
+  saveIndex(loadIndex().filter(s=>s.id!==sid));
+  res.json({ success:true });
+});
+
+// PUT /api/submissions/:id — update a submission and regenerate files
+app.put('/api/submissions/:id', async (req, res) => {
+  try {
+    const sid = req.params.id.replace(/[^A-Z0-9\-]/g,'');
+    const fp = path.join(DATA_DIR, `${sid}.json`);
+    if (!fs.existsSync(fp)) return res.status(404).json({ success:false, message:'غير موجود' });
+    
+    const body = req.body;
+    if (!body?.projectIdea) return res.status(400).json({ success:false, message:'فكرة المشروع مطلوبة' });
+    
+    const existing = JSON.parse(fs.readFileSync(fp,'utf8'));
+    const serial = existing.serial || (loadIndex().reduce((m,s)=>Math.max(m, parseInt(s.serial)||0), 0) + 1);
+    const updated = { ...existing, ...body, id: sid, serial, submittedAt: existing.submittedAt||body.submittedAt, updatedAt: new Date().toISOString() };
+    
+    fs.writeFileSync(fp, JSON.stringify(updated, null, 2), 'utf8');
+    
+    // Update index
+    const index = loadIndex();
+    const idx = index.findIndex(s=>s.id===sid);
+    if (idx>=0) {
+      index[idx] = { ...index[idx], serial, projectIdea: body.projectIdea.substring(0,80), applicantName: body.applicantName||'', summary: body.summary||{}, updatedAt: updated.updatedAt };
+      saveIndex(index);
+    }
+    
+    // Regenerate files
+    const [excelBuf, wordBuf] = await Promise.all([generateExcel(updated), generateWord(updated)]);
+    fs.writeFileSync(path.join(DATA_DIR,`${sid}.xlsx`), excelBuf);
+    fs.writeFileSync(path.join(DATA_DIR,`${sid}.docx`), wordBuf);
+    
+    console.log(`✅ تم تحديث الطلب: ${sid}`);
+    return res.json({ success:true, id: sid, fileName: fileBase(updated)+'.docx' });
+  } catch(err) {
+    console.error('❌ خطأ في التحديث:', err);
+    return res.status(500).json({ success:false, message: err.message });
+  }
+});
+
+// ── تشخيص الإيميل: افتح /api/email-test لمعرفة سبب المشكلة بالضبط ──
+app.get('/api/email-test', async (req, res) => {
+  const present = {
+    BREVO_API_KEY: process.env.BREVO_API_KEY ? `✓ مضبوط (${process.env.BREVO_API_KEY.length} حرف)` : '✗ غير مضبوط',
+    SENDER_EMAIL: process.env.SENDER_EMAIL || process.env.EMAIL_USER || '✗ غير مضبوط',
+    RECEIVER_EMAIL: process.env.RECEIVER_EMAIL || '(سيُستخدم SENDER_EMAIL)',
+    CC_EMAIL: process.env.CC_EMAIL || '(لا يوجد)',
+  };
+  if (!process.env.BREVO_API_KEY) {
+    return res.json({ ok:false, step:'config', message:'BREVO_API_KEY غير مضبوط في Render → Environment', present });
+  }
+  if (!process.env.SENDER_EMAIL && !process.env.EMAIL_USER) {
+    return res.json({ ok:false, step:'config', message:'SENDER_EMAIL غير مضبوط (إيميل المُرسِل المُفعّل في Brevo)', present });
+  }
+  try {
+    const to = process.env.RECEIVER_EMAIL || process.env.SENDER_EMAIL || process.env.EMAIL_USER;
+    const cc = (process.env.CC_EMAIL||'').trim();
+    await sendViaBrevo({ to, cc,
+      subject:'✅ اختبار إيميل — نظام دراسة المشاريع',
+      html:'<div dir="rtl" style="font-family:Arial">إذا وصلتك هذه الرسالة فإعدادات الإيميل تعمل بنجاح، وكل النماذج القادمة ستصلك تلقائياً.</div>' });
+    return res.json({ ok:true, step:'sent', message:'تم إرسال إيميل اختبار بنجاح عبر Brevo — تفقّد صندوق الوارد (والـ CC).', to, cc:cc||'(لا يوجد)', present });
+  } catch(e){
+    return res.json({ ok:false, step:'send',
+      message:'فشل الإرسال عبر Brevo. الأسباب الشائعة: (1) BREVO_API_KEY خاطئ → الخطأ يحوي 401. (2) SENDER_EMAIL غير مُفعّل كمُرسِل في Brevo → الخطأ يحوي "sender" أو 400.',
+      error:String(e.message||e), present });
+  }
+});
+
+// مسار التقاط الكل (يجب أن يبقى آخر مسار) — يرجّع صفحة التقديم لأي رابط غير معروف
+app.get('*', (req, res) => res.sendFile(path.join(__dirname,'public','index.html')));
+
+app.listen(PORT, () => console.log(`🚀 يعمل على المنفذ ${PORT}`));
+module.exports = app;
